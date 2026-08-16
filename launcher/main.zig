@@ -33,9 +33,12 @@ pub fn main(init: std.process.Init) !void {
     const supervisor = try std.fs.path.join(alloc, &.{ resources_dir, "supervisor", "dsh-web.mjs" });
 
     // 1) dsh web runtime as a detached child (owns DSH_HOME, installs the
-    // privacy patch layer, binds 127.0.0.1:41730).
+    // privacy patch layer, binds 127.0.0.1:41730). Use the absolute node path:
+    // launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin) has no nvm.
+    const home = init.environ_map.get("HOME") orelse "/tmp";
+    const node_path = try std.fs.path.join(alloc, &.{ home, ".nvm/versions/node/v22.22.3/bin/node" });
     const sup = try std.process.spawn(init.io, .{
-        .argv = &.{ "node", supervisor },
+        .argv = &.{ node_path, supervisor },
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .ignore,
