@@ -1,7 +1,9 @@
-// dsh-native dev supervisor: boot `dsh web` with the app's private DSH_HOME
-// and privacy patch layer, on the fixed loopback port app.zon expects
-// (41730). Runs in the foreground; the Native SDK dev runner kills this
-// process tree when the shell exits, which takes dsh down with it.
+// dsh-native dev supervisor: boot `dsh web` against the SHARED ~/.dsh home
+// (same sessions, providers, and profile as `dsh web` on the CLI) on the
+// fixed loopback port app.zon expects (41730). Installs the privacy patch
+// layer into profiles/web on every boot — harmless to the CLI too, since it
+// only disables what you already disabled. Runs in the foreground; the
+// Native SDK dev runner kills this process tree on shell exit.
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { copyFileSync, mkdirSync } from 'node:fs';
@@ -11,7 +13,7 @@ import { homedir } from 'node:os';
 
 const PORT = 41730;
 const HOST = '127.0.0.1';
-const DSH_HOME = join(homedir(), '.dsh-native');
+const DSH_HOME = join(homedir(), '.dsh');
 const here = dirname(fileURLToPath(import.meta.url));
 
 // Resolve the dsh CLI from the supervisor's own node_modules.
