@@ -1,0 +1,14 @@
+# dsh-native privacy patch: no telemetry, no message/command feedback, no HMR
+# services. Top-level YAML array of loader patch entries (id-targeted
+# disables). Installed to profiles/web/cordis.patch.yml inside DSH_HOME on
+# every boot by supervisor/dsh-web.mjs (idempotent).
+- id: session-telemetry-otel
+  disabled: true
+- id: command-feedback
+  disabled: true
+- id: message-feedback
+  disabled: true
+- id: ui-message-feedback
+  disabled: true
+- id: client-hmr
+  disabled: true

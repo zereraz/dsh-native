@@ -1,0 +1,32 @@
+.{
+    .id ="com.zereraz.dsh-native",
+    .name = "dsh-native",
+    .display_name = "DeepSeek Harness",
+    .version = "0.1.0",
+    .icons = .{ "assets/icon.png" },
+    .platforms = .{ "macos" },
+    .permissions = .{},
+    .capabilities = .{ "webview" },
+    .frontend = .{
+        .dist = "supervisor",
+        .entry = "index.html",
+        .spa_fallback = true,
+        .dev = .{
+            .url ="http://127.0.0.1:41730/",
+            .command = .{ "node", "supervisor/dsh-web.mjs" },
+            .ready_path = "/",
+            .timeout_ms = 30000,
+        },
+    },
+    .security = .{
+        .navigation = .{
+            .allowed_origins = .{ "zero://app", "zero://inline", "http://127.0.0.1:41730" },
+            .external_links = .{ .action = "deny" },
+        },
+    },
+    .web_engine = "system",
+    .cef = .{ .dir = "third_party/cef/macos", .auto_install = false },
+    .windows = .{
+        .{ .label = "main", .title = "DeepSeek Harness", .width = 720, .height = 480, .restore_state = true },
+    },
+}

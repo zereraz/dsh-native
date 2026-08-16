@@ -1,0 +1,11 @@
+{
+  "name": "dsh-supervisor",
+  "private": true,
+  "description": "Dev supervisor for dsh-shell: boots dsh web on a random loopback port and launches the Native SDK shell at it.",
+  "scripts": {
+    "dev": "node run.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.6"
+  }
+}
