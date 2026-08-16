@@ -57,9 +57,10 @@ function loadShellEnv() {
   return out;
 }
 
-// Forward the parent environment so DSH_PROVIDER_API_KEY (from ~/.zshrc)
-// and friends reach dsh; layer the rc-file defaults UNDER process.env so an
-// interactive shell can still override per-boot.
+// Forward provider apiKeyEnv values (e.g., whatever your ~/.dsh/settings.yaml
+// references) so they reach dsh even when launched via Finder/launchd.
+// The rc-file defaults are layered UNDER process.env so an interactive shell
+// can still override per-boot.
 const env = {
   ...loadShellEnv(),
   ...process.env,
