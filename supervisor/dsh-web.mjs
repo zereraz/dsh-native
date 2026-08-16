@@ -6,7 +6,7 @@
 // Native SDK dev runner kills this process tree on shell exit.
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -29,9 +29,39 @@ function installPatch() {
 
 installPatch();
 
+// Merge env var-style "export NAME=..." lines from common shell rc files
+// (Finder/launchd spawns never source them, so provider apiKeyEnv values
+// need to come from shell defaults). Later sources win, so users can put
+// secrets in ~/.zshenv for earliest setup or override per-shell later.
+function loadShellEnv() {
+  const out = {};
+  const home = homedir();
+  const files = ['.zshenv', '.zprofile', '.zshrc', '.bash_profile', '.bashrc'];
+  const re = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/;
+  for (const f of files) {
+    let text;
+    try { text = readFileSync(join(home, f), 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      const m = line.match(re);
+      if (!m) continue;
+      let v = m[2].trim();
+      // strip surrounding quotes if the author quoted the whole value
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
+      }
+      // simple $(...) and $VAR expansion for common cases like $(cmd), $HOME
+      v = v.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (_, name) => process.env[name] ?? out[name] ?? '');
+      out[m[1]] = v;
+    }
+  }
+  return out;
+}
+
 // Forward the parent environment so DSH_PROVIDER_API_KEY (from ~/.zshrc)
-// and friends reach dsh; only override the dsh-native-specific keys.
+// and friends reach dsh; layer the rc-file defaults UNDER process.env so an
+// interactive shell can still override per-boot.
 const env = {
+  ...loadShellEnv(),
   ...process.env,
   DSH_HOME,
   DSH_TELEMETRY_DISABLED: '1',
