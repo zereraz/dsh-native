@@ -3,7 +3,7 @@
     .name = "dsh-native",
     .display_name = "DeepSeek Harness",
     .version = "0.1.0",
-    .icons = .{ "assets/icon.png" },
+    .icons = .{ "assets/AppIcon.icns", "assets/icon.png" },
     .platforms = .{ "macos" },
     .permissions = .{},
     .capabilities = .{ "webview" },
