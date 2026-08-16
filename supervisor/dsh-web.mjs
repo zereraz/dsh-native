@@ -58,12 +58,13 @@ function loadShellEnv() {
 }
 
 // Forward provider apiKeyEnv values (e.g., whatever your ~/.dsh/settings.yaml
-// references) so they reach dsh even when launched via Finder/launchd.
-// The rc-file defaults are layered UNDER process.env so an interactive shell
-// can still override per-boot.
+// references) so they reach dsh even when launched via Finder/launchd. The
+// rc-file values OVERRIDE process.env: an inherited-but-stale key (from an
+// agent runner or launchd boot env) must not shadow the current rc file,
+// which is the one place a human edits when rotating a credential.
 const env = {
-  ...loadShellEnv(),
   ...process.env,
+  ...loadShellEnv(),
   DSH_HOME,
   DSH_TELEMETRY_DISABLED: '1',
   DSH_TELEMETRY_MODE: 'DISABLED',
