@@ -3,3 +3,7 @@ zig-out/
 .zig-cache/
 dist/
 .native/
+
+# build outputs
+launcher/dsh-native
+dsh-native
