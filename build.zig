@@ -32,7 +32,7 @@ const PackageTarget = enum {
     linux,
 };
 
-const default_native_sdk_path ="/Users/zereraz/.nvm/versions/node/v22.22.3/lib/node_modules/@native-sdk/cli";
+const app_exe_name = "dsh-shell";
 const app_exe_name = "dsh-shell";
 
 pub fn build(b: *std.Build) void {
@@ -55,7 +55,9 @@ pub fn build(b: *std.Build) void {
     const cef_dir_override = b.option([]const u8, "cef-dir", "Override CEF root directory for Chromium builds");
     const cef_auto_install_override = b.option(bool, "cef-auto-install", "Override app.zon CEF auto-install setting");
     const package_target = b.option(PackageTarget, "package-target", "Package target: macos, windows, linux") orelse .macos;
-    const native_sdk_path = b.option([]const u8, "native-sdk-path", "Path to the Native SDK framework checkout") orelse default_native_sdk_path;
+    const native_sdk_path = b.option([]const u8, "native-sdk-path", "Path to the Native SDK framework checkout") orelse
+        b.graph.env_map.get("NATIVE_SDK_PATH") orelse
+        @panic("native SDK path unset: pass -Dnative-sdk-path=<dir> or export NATIVE_SDK_PATH (npm i -g @native-sdk/cli, then use its lib/node_modules/@native-sdk/cli dir)");
     const package_optimize_name = @tagName(package_optimize);
     const selected_platform: PlatformOption = switch (platform_option) {
         .auto => if (target.result.os.tag == .macos) .macos else if (target.result.os.tag == .linux) .linux else if (target.result.os.tag == .windows) .windows else .@"null",

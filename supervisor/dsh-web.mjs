@@ -74,7 +74,7 @@ const env = {
 // patch layer; pass it as argv (NODE_OPTIONS rejects it on every node).
 const child = spawn(
   process.execPath,
-  ['--expose-internals', dshBin, 'web', '--host', HOST, '--port', String(PORT), '--trusted-host', `${HOST}:${PORT}`],
+  ['--expose-internals', dshBin, 'web', '--host', HOST, '--port', String(PORT), '--trusted-host', `${HOST}:${PORT}`, '--no-open'],
   { env, stdio: 'inherit' },
 );
 
