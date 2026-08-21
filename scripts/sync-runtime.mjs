@@ -32,7 +32,10 @@ for (const group of ['packages', 'vendor']) {
       if (existsSync(join(p, 'package.json'))) {
         try {
           const pkg = JSON.parse(readFileSync(join(p, 'package.json'), 'utf8'))
-          if (pkg.name?.startsWith('@deepseek-ai/') && existsSync(join(target, basename(pkg.name)))) put(p, join(target, basename(pkg.name)))
+          // Install every built @deepseek-ai package — filtering by prior
+          // presence silently drops NEW packages the release added (e.g. the
+          // ui-renderer → infinite 'Loading plugins…').
+          if (pkg.name?.startsWith('@deepseek-ai/') && existsSync(join(p, 'lib'))) put(p, join(target, basename(pkg.name)))
         } catch { /* unparseable manifests are not runtime */ }
       }
       walk(p)
