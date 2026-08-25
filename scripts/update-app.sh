@@ -45,12 +45,14 @@ for i in $(seq 1 40); do
   page="$(curl -s -m 2 "http://127.0.0.1:$GATE_PORT/" 2>/dev/null || true)"
   [ -n "$page" ] && break
 done
+bundle_ok=1
+curl -s -m 2 -o /dev/null "http://127.0.0.1:$GATE_PORT/plugins/@deepseek-ai/dsh-client-modules/client.js" || bundle_ok=0
 kill $GATE_PID 2>/dev/null || true
 if   ! printf '%s' "$page" | grep -q '__DSH_BOOT__';    then
   echo "GATE FAIL: no boot graph in served page — aborting, app untouched"; exit 1
 elif ! printf '%s' "$page" | grep -q '__ModuleLoader__='; then
   echo "GATE FAIL: facade script missing (would boot to 'Failed to load plugins') — aborting, app untouched"; exit 1
-elif ! curl -s -m 2 -o /dev/null "http://127.0.0.1:$GATE_PORT/plugins/@deepseek-ai/dsh-client-modules/client.js"; then
+elif [ "$bundle_ok" = "0" ]; then
   echo "GATE FAIL: plugin bundles not served — aborting"; exit 1
 fi
 echo "gate passed: boot graph + facade + bundles all served"

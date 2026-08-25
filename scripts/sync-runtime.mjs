@@ -4,7 +4,7 @@
 // exists on the target, each per its own `files` field. No registry calls.
 import { execSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, copyFileSync, cpSync } from 'node:fs'
-import { join, basename } from 'node:path'
+import { join, basename, dirname } from 'node:path'
 
 const [harness, sup] = process.argv.slice(2)
 if (!harness || !sup) { console.error('usage: sync-runtime.mjs <harness> <supervisor>'); process.exit(1) }
@@ -101,7 +101,7 @@ function alignDep(name, fromDir) {
       console.log(`  aligned ${name} ${dstVer ?? '—'} → ${srcPkg.version}`)
     }
     for (const dep of Object.keys(srcPkg.dependencies ?? {}))
-      if (!dep.startsWith('@deepseek-ai/')) alignDep(dep, fromDir)
+      if (!dep.startsWith('@deepseek-ai/')) alignDep(dep, root)
   } catch { console.log(`  note: ${name} unresolvable from repo (optional or bundled — gate decides)`) }
 }
 for (const [n, d] of depSources) alignDep(n, d)

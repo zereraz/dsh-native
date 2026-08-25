@@ -6,6 +6,7 @@
     "dev": "node run.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.0-rc.6"
+    "@deepseek-ai/dsh": "0.1.1-rc.2",
+    "open": "^11.0.1"
   }
 }

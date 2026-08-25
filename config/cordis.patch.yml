@@ -12,3 +12,6 @@
   disabled: true
 - id: client-hmr
   disabled: true
+- id: attachment-local
+  config:
+    maxImageDimension: 6000
