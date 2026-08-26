@@ -64,6 +64,16 @@ rm -rf "$DST"
 ditto "$APP_ROOT/zig-out/package/dsh-native.app" "$DST"
 codesign --force --deep --sign - "$DST" 2>/dev/null || true
 echo "installed. rollback copy: $ROLLBACK"
+python3 - "$DST" <<'PYEOF'
+import json, pathlib, subprocess, sys, datetime
+state = pathlib.Path.home()/'.dsh'/'update-state.json'
+old = json.loads(state.read_text()) if state.exists() else {}
+ver = subprocess.run(['/usr/libexec/PlistBuddy','-c','Print :CFBundleShortVersionString', sys.argv[1]+'/Contents/Info.plist'], capture_output=True, text=True).stdout.strip()
+now = datetime.datetime.now().astimezone().strftime('%Y-%m-%dT%H:%M:%S%z')
+old.update(version=ver, installedAt=old.get('installedAt') if old.get('installedAt') == now else now,
+           lastAction='update', lastActionStatus='installed')
+state.write_text(json.dumps(old, indent=2))
+PYEOF
 if [ "${1:-}" = "--restart" ] || [ "${RESTART:-0}" = "1" ]; then
   say + "graceful relaunch cycle"
   bash "$APP_ROOT/scripts/restart-app.sh" ${FORCE:+--force}
