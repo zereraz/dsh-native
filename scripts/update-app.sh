@@ -64,4 +64,10 @@ rm -rf "$DST"
 ditto "$APP_ROOT/zig-out/package/dsh-native.app" "$DST"
 codesign --force --deep --sign - "$DST" 2>/dev/null || true
 echo "installed. rollback copy: $ROLLBACK"
-echo "QUIT and relaunch the app whenever ready."
+if [ "${1:-}" = "--restart" ] || [ "${RESTART:-0}" = "1" ]; then
+  say + "graceful relaunch cycle"
+  bash "$APP_ROOT/scripts/restart-app.sh" ${FORCE:+--force}
+else
+  echo "QUIT and relaunch the app whenever ready — or rerun with:"
+  echo "  bash $APP_ROOT/scripts/restart-app.sh   (graceful: quits, drains, relaunches, health-gates)"
+fi
