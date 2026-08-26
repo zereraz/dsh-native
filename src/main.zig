@@ -7,15 +7,8 @@ pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 const UI_URL = "http://127.0.0.1:41730/";
 const SHELL_ROOT = "/Users/zereraz/Code/Zereraz/voice/apps/dsh-shell";
 const LOG = "/Users/zereraz/.dsh/menubar.log";
-
-const menus = [_]native_sdk.Menu{
-    .{ .title = "DeepSeek Harness", .items = &.{
-        .{ .label = "Check for Updates…", .command = "dsh.update.check" },
-        .{ .label = "Apply & Restart…", .command = "dsh.update.apply" },
-        .{ .separator = true },
-        .{ .label = "Toggle Auto-Apply When Idle", .command = "dsh.update.autoapply" },
-    } },
-};
+// Menus are declared in app.zon (manifest owns product chrome; main.zig owns
+// native behavior): the .command strings come back through handleEvent.
 
 const App = struct {
     io: std.Io,
@@ -89,7 +82,6 @@ pub fn main(init: std.process.Init) !void {
         .security = .{
             .navigation = .{ .allowed_origins = &dev_origins },
         },
-        .menus = &menus,
     }, init);
 }
 

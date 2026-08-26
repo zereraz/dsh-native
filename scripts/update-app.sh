@@ -75,7 +75,7 @@ old.update(version=ver, installedAt=old.get('installedAt') if old.get('installed
 state.write_text(json.dumps(old, indent=2))
 PYEOF
 if [ "${1:-}" = "--restart" ] || [ "${RESTART:-0}" = "1" ]; then
-  say + "graceful relaunch cycle"
+  say "graceful relaunch cycle"
   bash "$APP_ROOT/scripts/restart-app.sh" ${FORCE:+--force}
 else
   echo "QUIT and relaunch the app whenever ready — or rerun with:"
