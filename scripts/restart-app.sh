@@ -46,7 +46,12 @@ while [ $# -gt 0 ]; do
   shift
 done
 say() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*"; }
-http() { curl -sS -o /dev/null -m 2 -w '%{http_code}' "$HOST_URL/" 2>/dev/null || echo 000; }
+# dsh-local fix: curl's -w %{http_code} ALREADY prints "000" when the
+# connection fails — so the trailing "|| echo 000" appended a SECOND 000,
+# making $(http) "000\n000", which never matched [ = 000 ]. The drain loop
+# below ALWAYS burned 15s and exit-1'd with "still answering over a zombie"
+# on an empty port. The original || guard was redundant; drop it.
+http() { curl -sS -o /dev/null -m 2 -w '%{http_code}' "$HOST_URL/" 2>/dev/null || true; }
 
 # --- 0. activity gate -------------------------------------------------------
 MAPFILE=()
