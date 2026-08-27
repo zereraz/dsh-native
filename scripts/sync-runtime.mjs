@@ -83,6 +83,20 @@ const repoWalk = (dir) => {
 }
 repoWalk(join(harness, 'packages')); repoWalk(join(harness, 'vendor')); repoWalk(join(harness, 'apps'))
 const done = new Set()
+// Locate a package directory without honoring its `exports` conditions:
+// ESM-only packages (e.g. @earendil-works/pi-ai) expose only "import"
+// conditions and no "./package.json", so createRequire().resolve()
+// (CJS conditions) throws ERR_PACKAGE_PATH_NOT_EXPORTED for every probe.
+// The dependent's pnpm-isolated node_modules always links the real dir,
+// so walk ancestors on disk — that's exactly what runtime import does.
+function lookupPkgDir(name, fromDir) {
+  for (let dir = fromDir; ; dir = dirname(dir)) {
+    const candidate = join(dir, 'node_modules', ...name.split('/'))
+    if (existsSync(join(candidate, 'package.json'))) return candidate
+    const parent = dirname(dir)
+    if (parent === dir) return null
+  }
+}
 function alignDep(name, fromDir) {
   if (done.has(name)) return
   done.add(name)
@@ -90,7 +104,12 @@ function alignDep(name, fromDir) {
     const req = createRequire(join(fromDir, 'r.cjs'))
     let root
     try { root = dirname(req.resolve(`${name}/package.json`)) }
-    catch { let p = req.resolve(name); while (!existsSync(join(p, 'package.json'))) p = dirname(p); root = p }
+    catch {
+      let p = null
+      try { p = req.resolve(name) } catch { root = lookupPkgDir(name, fromDir) }
+      if (!root && p) { while (!existsSync(join(p, 'package.json'))) p = dirname(p); root = p }
+      if (!root) throw new Error(`${name} unresolvable by require or on disk`) 
+    }
     const srcPkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
     const dst = join(supMods, ...name.split('/'))
     let dstVer = null
@@ -102,7 +121,7 @@ function alignDep(name, fromDir) {
     }
     for (const dep of Object.keys(srcPkg.dependencies ?? {}))
       if (!dep.startsWith('@deepseek-ai/')) alignDep(dep, root)
-  } catch { console.log(`  note: ${name} unresolvable from repo (optional or bundled — gate decides)`) }
+  } catch (e) { console.log(`  note: ${name} unresolvable from repo (${e?.code ?? e?.message} — optional or bundled; gate decides)`) }
 }
 for (const [n, d] of depSources) alignDep(n, d)
 // koffi native sibling package: version must pair exactly
