@@ -6,6 +6,7 @@
 # current app untouched. Every run snapshots ~/.dsh (git) and stages a
 # rollback copy of the working app.
 set -euo pipefail
+exec 9>"${HOME}/.dsh/app-update.lock"; flock -n 9 || { echo "another update/apply runs — exiting" >&2; exit 4; }
 
 # Point HARNESS_REPO at your local deepseek-harness checkout (git, not npm).
 HARNESS="${HARNESS_REPO:?set HARNESS_REPO to your deepseek-harness checkout, e.g. export HARNESS_REPO=~/Code/deepseek-harness}"

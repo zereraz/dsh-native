@@ -16,6 +16,7 @@
 #   --idle N        quiet-period minutes before cycling (default 5)
 #   --dry-run       print every step and the activity report; touch nothing
 set -euo pipefail
+exec 9>"${HOME}/.dsh/app-update.lock"; flock -n 9 || { echo "another update/apply runs — exiting" >&2; exit 4; }
 
 DOMAIN="gui/$(id -u)"
 APP_NAME="DeepSeek Harness"

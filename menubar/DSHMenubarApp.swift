@@ -45,8 +45,19 @@ final class MenubarModel: ObservableObject {
     @Published var health: HostHealth = .checking
     @Published var lastLine = ""
     @Published var activeSessions = 0
+    // Auto-apply source of truth: ~/.dsh/autoapply.enabled (shared with the
+    // app's menu toggle). UserDefaults kept only for pre-file consumers.
+    let autoApplyFlagFile = NSHomeDirectory() + "/.dsh/autoapply.enabled"
     @Published var autoApply: Bool = UserDefaults.standard.bool(forKey: "autoApply") {
-        didSet { UserDefaults.standard.set(autoApply, forKey: "autoApply") }
+        didSet {
+            UserDefaults.standard.set(autoApply, forKey: "autoApply")
+            syncFlagFile()
+        }
+    }
+    private func syncFlagFile() {
+        let exists = FileManager.default.fileExists(atPath: autoApplyFlagFile)
+        if autoApply && !exists { FileManager.default.createFile(atPath: autoApplyFlagFile, contents: Data()) }
+        if !autoApply && exists { try? FileManager.default.removeItem(atPath: autoApplyFlagFile) }
     }
 
     private var timer: Timer?
@@ -82,6 +93,10 @@ final class MenubarModel: ObservableObject {
     func poll() {
         state = readState() ?? UpdateState()
         activeSessions = countActiveSessions(minutes: 10)
+        // file flag wins (the app menu writes the file, not UserDefaults)
+        if FileManager.default.fileExists(atPath: autoApplyFlagFile) != autoApply {
+            autoApply = FileManager.default.fileExists(atPath: autoApplyFlagFile)
+        }
         Task {
             let code = await healthCheck()
             health = (code == 200) ? .up : .down
