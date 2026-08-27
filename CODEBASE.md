@@ -63,3 +63,23 @@ each file on its own merits.
 - rebuild of zig shell NOT required (no zig-src edits in this round)
 - the only `/tmp` documentation I kept is the settings backup (copied to
   dsh-repair)
+
+## Round 3 (goal-driven): the update pipeline, made testable, and the bug THAT exposed
+
+Test-first iteration over the whole click path (update-app.sh --restart,
+restart-app.sh, package-and-install.sh):
+- UNIFIED the stamp function: the Python 3 duplicate implementations with
+  drifting shapes became ONE script (scripts/stamp-update-state.mjs) with
+  environment-overridable state path. Property-checked: ISO8601 parseability,
+  install→applied order, install-invalidates-appliedAt.
+- CRITICAL CATCH: the flock-based lock(PREV commit of this repo) breaks under
+  the users' own launchd PATH (no flock binary) — and a MISSING flock is
+  identify-identical to a held lock, meaning the pipeline would have died
+  politely on every menu-click from TODAY onward. Ported the lock to POSIX
+  atomic `mkdir`: no external dep, no false-gate failure mode, trap-released.
+- Live behavioral evidence (not log-babble): held lock ⇒ exit 4; busy chats
+  ⇒ exit 3 + port 41730 untouched; stamp semantics round-trip; all wrappers
+  `bash -n`.
+Know-limit: the end-to-end REAL cycle (quit→drain→relaunch→rollback) was
+piecewise exercised (prelim cycles + drain/health probes) but the user-owned
+final fire remains HIS click. No further self-incident last words.
