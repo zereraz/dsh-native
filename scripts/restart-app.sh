@@ -16,7 +16,14 @@
 #   --idle N        quiet-period minutes before cycling (default 5)
 #   --dry-run       print every step and the activity report; touch nothing
 set -euo pipefail
-exec 9>"${HOME}/.dsh/app-update.lock"; flock -n 9 || { echo "another update/apply runs — exiting" >&2; exit 4; }
+# Portable cross-url lock: mkdir is atomic everywhere (flock binary is absent
+# from launchd's minimal PATH — a missing flock binary used to be indistinguishable
+# from a held lock and gated runs forever).
+LOCKDIR="$HOME/.dsh/app-update.lock.d"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  echo "another update/apply runs (lock $LOCKDIR) — exiting" >&2; exit 4
+fi
+trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
 
 DOMAIN="gui/$(id -u)"
 APP_NAME="DeepSeek Harness"
@@ -104,13 +111,5 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/verify-ptc.mjs" ]; then
   node "$SCRIPT_DIR/verify-ptc.mjs" && say "PTC smoke: OK" || say "PTC smoke: WARN (see above) — old build still healthy enough to report"
 fi
-python3 - "$DST" <<'PYEOF'
-import json, pathlib, subprocess, sys, datetime
-state = pathlib.Path.home()/'.dsh'/'update-state.json'
-old = json.loads(state.read_text()) if state.exists() else {}
-ver = subprocess.run(['/usr/libexec/PlistBuddy','-c','Print :CFBundleShortVersionString', sys.argv[1]+'/Contents/Info.plist'], capture_output=True, text=True).stdout.strip()
-now = datetime.datetime.now().astimezone().strftime('%Y-%m-%dT%H:%M:%S%z')
-old.update(version=ver, appliedAt=now, lastAction='apply', lastActionStatus='ok')
-state.write_text(json.dumps(old, indent=2))
-PYEOF
+node "$SCRIPT_DIR"/stamp-update-state.mjs applied "$DST"
 say "done. Go ahead and use the app."

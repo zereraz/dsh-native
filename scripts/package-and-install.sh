@@ -57,12 +57,5 @@ say "swap into /Applications (rollback at $ROLLBACK)"
 rm -rf "$ROLLBACK"; [ -d "$DST" ] && cp -a "$DST" "$ROLLBACK"
 rm -rf "$DST"; ditto "$ARTIFACT" "$DST"; codesign --force --deep --sign - "$DST" >/dev/null
 
-python3 - "$VER" "$STATE" <<'PYEOF'
-import json, pathlib, sys, datetime
-ver, p = sys.argv[1], pathlib.Path(sys.argv[2])
-old = json.loads(p.read_text()) if p.exists() else {}
-old.update(version=ver, installedAt=datetime.datetime.now().astimezone().strftime('%Y-%m-%dT%H:%M:%S%z'),
-           appliedAt=None, lastAction='update', lastActionStatus=f'v{ver} shell-only install via package-and-install.sh')
-p.write_text(json.dumps(old, indent=2))
-PYEOF
+node "$ROOT/scripts/stamp-update-state.mjs" installed "$DST"
 say "installed v$VER. Relaunch when ready: bash $ROOT/scripts/restart-app.sh"

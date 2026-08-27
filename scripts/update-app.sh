@@ -6,7 +6,14 @@
 # current app untouched. Every run snapshots ~/.dsh (git) and stages a
 # rollback copy of the working app.
 set -euo pipefail
-exec 9>"${HOME}/.dsh/app-update.lock"; flock -n 9 || { echo "another update/apply runs — exiting" >&2; exit 4; }
+# Portable cross-url lock: mkdir is atomic everywhere (flock binary is absent
+# from launchd's minimal PATH — a missing flock binary used to be indistinguishable
+# from a held lock and gated runs forever).
+LOCKDIR="$HOME/.dsh/app-update.lock.d"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  echo "another update/apply runs (lock $LOCKDIR) — exiting" >&2; exit 4
+fi
+trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
 
 # Point HARNESS_REPO at your local deepseek-harness checkout (git, not npm).
 HARNESS="${HARNESS_REPO:?set HARNESS_REPO to your deepseek-harness checkout, e.g. export HARNESS_REPO=~/Code/deepseek-harness}"
@@ -65,16 +72,7 @@ rm -rf "$DST"
 ditto "$APP_ROOT/zig-out/package/dsh-native.app" "$DST"
 codesign --force --deep --sign - "$DST" 2>/dev/null || true
 echo "installed. rollback copy: $ROLLBACK"
-python3 - "$DST" <<'PYEOF'
-import json, pathlib, subprocess, sys, datetime
-state = pathlib.Path.home()/'.dsh'/'update-state.json'
-old = json.loads(state.read_text()) if state.exists() else {}
-ver = subprocess.run(['/usr/libexec/PlistBuddy','-c','Print :CFBundleShortVersionString', sys.argv[1]+'/Contents/Info.plist'], capture_output=True, text=True).stdout.strip()
-now = datetime.datetime.now().astimezone().strftime('%Y-%m-%dT%H:%M:%S%z')
-old.update(version=ver, installedAt=old.get('installedAt') if old.get('installedAt') == now else now,
-           lastAction='update', lastActionStatus='installed')
-state.write_text(json.dumps(old, indent=2))
-PYEOF
+node "$APP_ROOT/scripts/stamp-update-state.mjs" installed "$DST"
 if [ "${1:-}" = "--restart" ] || [ "${RESTART:-0}" = "1" ]; then
   say "graceful relaunch cycle"
   bash "$APP_ROOT/scripts/restart-app.sh" ${FORCE:+--force}
