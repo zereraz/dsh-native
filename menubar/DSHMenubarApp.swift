@@ -192,12 +192,15 @@ final class MenubarModel: ObservableObject {
         await withCheckedContinuation { cont in
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/bash")
-            p.arguments = ["-c", cmd + " 2>&1 | tail -8"]
+            p.arguments = ["-c", cmd]
+            // dsh-local fix 2026-08: the old form piped through "| tail -8",
+            // so terminationStatus was TAIL's (always 0) — every failed
+            // update/restart was reported to the user as success.
             let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
             p.terminationHandler = { proc in
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let text = String(data: data, encoding: .utf8) ?? ""
-                appendLog("=== \(isoDate.string(from: Date())): \(cmd)\n\(text)\nexit=\(proc.terminationStatus)")
+                appendLog("=== \(isoDate.string(from: Date())): \(cmd)\n\(String(text.suffix(4000)))\nexit=\(proc.terminationStatus)")
                 cont.resume(returning: (text, proc.terminationStatus))
             }
             do { try p.run() } catch { cont.resume(returning: ("spawn failed: \(error)", 127)) }
