@@ -55,15 +55,24 @@ for i in $(seq 1 40); do
 done
 bundle_ok=1
 curl -s -m 2 -o /dev/null "http://127.0.0.1:$GATE_PORT/plugins/@deepseek-ai/dsh-client-modules/client.js" || bundle_ok=0
-kill $GATE_PID 2>/dev/null || true
-if   ! printf '%s' "$page" | grep -q '__DSH_BOOT__';    then
+if ! printf '%s' "$page" | grep -q '__DSH_BOOT__'; then
   echo "GATE FAIL: no boot graph in served page — aborting, app untouched"; exit 1
 elif ! printf '%s' "$page" | grep -q '__ModuleLoader__='; then
   echo "GATE FAIL: facade script missing (would boot to 'Failed to load plugins') — aborting, app untouched"; exit 1
 elif [ "$bundle_ok" = "0" ]; then
   echo "GATE FAIL: plugin bundles not served — aborting"; exit 1
 fi
-echo "gate passed: boot graph + facade + bundles all served"
+# pi-ai dependency closure: ESM-only exports of @earendil-works/pi-ai used to
+# defeat the alignment probe and silently ship a bundle that errors on every
+# LLM turn ("Cannot find package 'openai'"). Prove the import path NOW:
+if [ -d "$SUP/node_modules/@earendil-works/pi-ai" ] \
+  && ! node --input-type=module -e "await import('$SUP/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js')" 2>/dev/null; then
+  echo "GATE FAIL: pi-ai openai-completions not importable (dependency closure broken) — aborting, app untouched"; exit 1
+fi
+[ -f "$APP_ROOT/zig-out/package/dsh-native.app/Contents/Resources/config/cordis.patch.yml" ] \
+  || { echo "GATE FAIL: bundle missing Resources/config/cordis.patch.yml (supervisor crashes on boot) — aborting"; exit 1; }
+kill $GATE_PID 2>/dev/null || true
+echo "gate passed: boot graph + facade + bundles + pi-ai closure + config"
 
 say 6/6 "swap installed app"
 mkdir -p "$HOME/Applications"
