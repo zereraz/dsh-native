@@ -1,0 +1,27 @@
+--- a/src/platform/macos/appkit_host.m
++++ b/src/platform/macos/appkit_host.m
+@@ -9857,14 +9857,20 @@
+         return;
+     }
+ 
+-    NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@""];
+-    [NSApp setMainMenu:mainMenu];
+-    [self addApplicationMenuToMenu:mainMenu];
++    // dsh-local fix: manifest menus must MERGE with the standard bar, not
++    // replace it — replacing dropped File/Edit/View/Window, and with them
++    // every editing KeyEquivalent (Cmd+C/V/X/A beeped and did nothing).
++    // Build the standard bar, then insert the manifest menus after the
++    // Application menu. Re-apply if the npm SDK is upgraded without this.
++    [self buildMenuBar];
++    NSMenu *mainMenu = [NSApp mainMenu];
++    NSInteger insertAt = [mainMenu numberOfItems] > 0 ? 1 : 0;
+ 
+     for (size_t menuIndex = 0; menuIndex < menuCount; menuIndex++) {
+         NSString *title = [[NSString alloc] initWithBytes:menuTitles[menuIndex] length:menuTitleLengths[menuIndex] encoding:NSUTF8StringEncoding] ?: @"";
+         NSMenuItem *topItem = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+-        [mainMenu addItem:topItem];
++        [mainMenu insertItem:topItem atIndex:insertAt];
++        insertAt += 1;
+         NSMenu *menu = [[NSMenu alloc] initWithTitle:title];
+         [topItem setSubmenu:menu];
+ 
