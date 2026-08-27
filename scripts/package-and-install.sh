@@ -66,6 +66,11 @@ fi
 GATE_PORT="${GATE_PORT:-41798}"
 say "gate candidate on :$GATE_PORT"
 SUP="$ARTIFACT/Contents/Resources/supervisor"
+# dsh-local fix: the ESM probes below need an ABSOLUTE path — relative SUP
+# like 'zig-out/...' makes `await import('zig-out/...')` resolve as a bare
+# package name (ERR_MODULE_NOT_FOUND for package 'zig-out'), failing the gate
+# even when the closure is perfect. Anchor to $PWD before probing.
+SUP="$(cd "$SUP" && pwd)"
 [ -f "$ARTIFACT/Contents/Resources/config/cordis.patch.yml" ] \
   || { echo "GATE FAIL: bundle missing Resources/config/cordis.patch.yml (supervisor crashes on boot)" >&2; exit 1; }
 if [ -d "$SUP/node_modules/@earendil-works/pi-ai" ]; then
