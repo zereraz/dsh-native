@@ -48,16 +48,20 @@ final class MenubarModel: ObservableObject {
     // Auto-apply source of truth: ~/.dsh/autoapply.enabled (shared with the
     // app's menu toggle). UserDefaults kept only for pre-file consumers.
     let autoApplyFlagFile = NSHomeDirectory() + "/.dsh/autoapply.enabled"
-    @Published var autoApply: Bool = UserDefaults.standard.bool(forKey: "autoApply") {
+    // Default ON (2026-08-28 product decision: updates should be automatic;
+    // file flag or explicit defaults override). Toggle off is one click.
+    @Published var autoApply: Bool = UserDefaults.standard.object(forKey: "autoApply") == nil
+        ? true
+        : UserDefaults.standard.bool(forKey: "autoApply") {
         didSet {
             UserDefaults.standard.set(autoApply, forKey: "autoApply")
             syncFlagFile()
         }
     }
     private func syncFlagFile() {
-        let exists = FileManager.default.fileExists(atPath: autoApplyFlagFile)
-        if autoApply && !exists { FileManager.default.createFile(atPath: autoApplyFlagFile, contents: Data()) }
-        if !autoApply && exists { try? FileManager.default.removeItem(atPath: autoApplyFlagFile) }
+        // content-bearing flag: "1"/"0" (existence alone could not encode OFF
+        // under the new ON-by-default semantics).
+        try? (autoApply ? "1" : "0").write(toFile: autoApplyFlagFile, atomically: true, encoding: .utf8)
     }
 
     private var timer: Timer?
@@ -94,8 +98,9 @@ final class MenubarModel: ObservableObject {
         state = readState() ?? UpdateState()
         activeSessions = countActiveSessions(minutes: 10)
         // file flag wins (the app menu writes the file, not UserDefaults)
-        if FileManager.default.fileExists(atPath: autoApplyFlagFile) != autoApply {
-            autoApply = FileManager.default.fileExists(atPath: autoApplyFlagFile)
+        if let s = try? String(contentsOfFile: autoApplyFlagFile, encoding: .utf8) {
+            let flagOn = s.trimmingCharacters(in: .whitespacesAndNewlines) != "0"
+            if flagOn != autoApply { autoApply = flagOn }
         }
         Task {
             let code = await healthCheck()
@@ -109,6 +114,14 @@ final class MenubarModel: ObservableObject {
     // MARK: actions
 
     func openApp() {
+        // The Open button must open THE APP, not a sibling browser tab —
+        // "I clicked and only a browser tab opened" (2026-08-28).
+        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        p.arguments = ["-g", "/Applications/DeepSeek Harness.app"]
+        try? p.run()
+    }
+
+    func openWeb() {
         let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         p.arguments = ["http://127.0.0.1:41730"]
         try? p.run()

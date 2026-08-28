@@ -55,7 +55,9 @@ fn dispatch(io: std.Io, command: []const u8) void {
             "/usr/bin/osascript -e \"display notification \\\"Restart aborted or failed (active chats?) — see ~/.dsh/menubar.log\\\" with title \\\"DeepSeek Harness\\\"\" " ++
             "' >>" ++ LOG ++ " 2>&1 &");
     } else if (std.mem.eql(u8, command, "dsh.update.autoapply")) {
-        run(io, "f=/Users/zereraz/.dsh/autoapply.enabled; if [ -f \"$f\" ]; then rm -f \"$f\"; n=OFF; else touch \"$f\"; n=ON; fi; " ++
+        // content-bearing flag: "1"/"0" (shares the menubar's new semantics;
+        // missing file = ON, since 2026-08-28 default-ON product decision).
+        run(io, "f=/Users/zereraz/.dsh/autoapply.enabled; cur=$(cat \"$f\" 2>/dev/null || echo 1); if [ \"$cur\" = 0 ]; then echo 1 > \"$f\"; n=ON; else echo 0 > \"$f\"; n=OFF; fi; " ++
             "/usr/bin/osascript -e \"display notification \\\"Auto-apply when idle: $n\\\" with title \\\"DeepSeek Harness\\\"\"");
     }
 }

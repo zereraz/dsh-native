@@ -135,3 +135,6 @@ if [ -f "$SCRIPT_DIR/verify-ptc.mjs" ]; then
 fi
 node "$SCRIPT_DIR"/stamp-update-state.mjs applied "$DST"
 say "done. Go ahead and use the app."
+# Re-open the GUI by itself — the cycle only guaranteed the backend; without
+# this the user hunted the app with Spotlight by hand (2026-08-28).
+open -g "$DST" 2>/dev/null || true

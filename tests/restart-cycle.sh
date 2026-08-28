@@ -41,7 +41,14 @@ cat > "$BIN/osascript" <<'MOCK'
 #!/bin/bash
 exit 0
 MOCK
-chmod +x "$BIN/launchctl" "$BIN/osascript"
+cat > "$BIN/open" <<'MOCK'
+#!/bin/bash
+cat >> "$MOCK_T/opened.log" <<EOF
+open $*
+EOF
+exit 0
+MOCK
+chmod +x "$BIN/launchctl" "$BIN/osascript" "$BIN/open"
 PLIST="$HOME_F/Library/LaunchAgents/com.zereraz.dsh-app.plist"
 printf '<plist version="1.0"/>' > "$PLIST"
 
@@ -92,6 +99,9 @@ node -e "
 const s=JSON.parse(require('fs').readFileSync('$HOME_F/.dsh/update-state.json','utf8'))
 if (s.lastAction==='applied' && s.appliedAt) process.exit(0); process.exit(1)
 " && ok "3 state stamped applied" || bad "3 state: $(cat $HOME_F/.dsh/update-state.json 2>/dev/null)"
+# the app must re-open ITSELF — the "only the backend came back" gap
+grep -q "open -g $DST_F" "$T/opened.log" 2>/dev/null \
+  && ok "3 GUI re-opened via open -g" || bad "3 GUI NOT re-opened by the cycle"
 kill "$(cat $T/server.pid)" 2>/dev/null
 
 # --- 4. health-fail → rollback swapped back + exit 1 --------------------------
