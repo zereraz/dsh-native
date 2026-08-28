@@ -118,3 +118,13 @@ H. **Menubar extra**: SwiftUI MenuBarExtra app (~180 lines, no Xcode project,
 5. When update feeds stabilize, retire: update-state.json, menubar extra,
    restart-app.sh — replacing with `native update sign` + in-app
    checkForUpdatesMenu — and document the retirement in release notes.
+
+## 2026-08-28 (pull sweep): alpha's authentication break — STAY on dsh-v0.1.1-rc.2
+- Upstream shipped dsh-0.1.2-alpha.1 (1000+ commits): `dsh web` now issues a
+  URL token and answers `/` with **401** when token-less. The native app flow
+  embeds the UI via plain webview URL — it CANNOT ride this contract today.
+- Decision: app pins **dsh-v0.1.1-rc.2 + our 3 patches** (pristine worktree
+  build + marker census proven) until a tagged mild version with a documented
+  embedded-app auth handoff (or upstream documents the token's local path).
+- DEBT: pipelines must fetch-with-token when the token becomes primary; the
+  health gate's bare `curl /` will need the token URL from the boot log.
