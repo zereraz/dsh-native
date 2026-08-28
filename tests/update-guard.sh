@@ -45,7 +45,28 @@ EOF
 grep -q "dsh-local fix" "${NATIVE_SDK_PATH:-$HOME/.nvm/versions/node/v22.22.3/lib/node_modules/@native-sdk/cli}/src/platform/macos/appkit_host.m" \
   && ok "sdk: menu-merge patch present" || bad "sdk: menu-merge patch MISSING (re-run scripts/apply-native-sdk-patches.sh)"
 
-# 6. installed app basics
+# 6. runtime census: EVERY copy of the worker on the machine must carry the
+#    uv_cwd re-anchor (ensureSpawnableCwd x2). A drifting THIRD copy is exactly
+#    how the 2026-08-28 pocket-server ghost happened again.
+copies=$(python3 - <<'EOF'
+import os
+seen = set()
+for b in [os.path.expanduser(p) for p in ("~/.pocket-server/lib", "~/.nvm")] + \
+         ["/Applications/DeepSeek Harness.app/Contents/Resources"]:
+    for root, dirs, files in os.walk(b):
+        if root.count(os.sep) - b.count(os.sep) > 8: dirs[:] = []
+        if "index.js" in files and root.endswith("dsh-code-runtime-worker-thread/lib"):
+            seen.add(os.path.join(root, "index.js"))
+for f in sorted(seen): print(f)
+EOF
+)
+[ -n "$copies" ] || bad "census: no worker copies found at all"
+while IFS= read -r f; do
+  c=$(grep -c ensureSpawnableCwd "$f" 2>/dev/null || echo 0)
+  [ "$c" = "2" ] && ok "census: fixed worker in $f" || bad "census: UNPATCHED worker ($c marks): $f"
+done <<< "$copies"
+
+# 7. installed app basics
 AA="/Applications/DeepSeek Harness.app"
 [ -f "$AA/Contents/Resources/config/cordis.patch.yml" ] && ok "install: config present" || bad "install: config MISSING"
 [ -d "$AA/Contents/Resources/supervisor/node_modules/openai" ] && ok "install: pi-ai closure (openai) present" || bad "install: openai MISSING"

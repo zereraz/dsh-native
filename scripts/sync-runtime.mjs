@@ -51,6 +51,40 @@ if (existsSync(join(target, 'dsh-web-frontend'))) {
 }
 console.log(`synced ${synced} packages + web frontend`)
 
+// --- mirror into EVERY runtime copy on the machine (2026-08 lesson) ---------
+// The npm-global `dsh` under the POCKET-SERVER prefix shipped a THIRD copy of
+// the runtime that drifted away from the harness repo (uv_cwd ghost returned
+// there). Any future pipeline run keeps all known copies in lockstep — the
+// source of truth is always the harness checkout, so every mirror gets the
+// same never-downgrade safety as the app bundle gets from the repo versions.
+const extraTargets = [
+  `${process.env.HOME}/.pocket-server/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai`,
+]
+for (const extra of extraTargets) {
+  if (!existsSync(extra)) continue
+  let mirrored = 0
+  const maybe = (srcDir, dstDir) => { if (existsSync(dstDir)) { put(srcDir, dstDir); mirrored++ } }
+  maybe(join(harness, 'apps/cli'), join(extra, 'dsh'))
+  for (const group of ['packages', 'vendor']) {
+    const walk = (dir) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name)
+        if (e.name === 'node_modules' || !e.isDirectory()) continue
+        if (existsSync(join(p, 'package.json'))) {
+          try {
+            const pkg = JSON.parse(readFileSync(join(p, 'package.json'), 'utf8'))
+            if (pkg.name?.startsWith('@deepseek-ai/') && existsSync(join(p, 'lib')))
+              maybe(p, join(extra, basename(pkg.name)))
+          } catch { /* unparseable */ }
+        }
+        walk(p)
+      }
+    }
+    walk(join(harness, group))
+  }
+  console.log(`mirrored ${mirrored} packages → ${extra}`)
+}
+
 // --- Third-party dependency alignment (learned the hard way, 2026-08) -------
 // Rules: (1) NEVER downgrade an installed dep whose version still satisfies
 // the declared range — native packages (koffi + @koromix/*) break on mismatch;
