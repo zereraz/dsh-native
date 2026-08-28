@@ -141,24 +141,13 @@ final class MenubarModel: ObservableObject {
     }
 
     func applyUpdateTapped() {
-        if activeSessions > 0 {
-            // No dialogs (2026-08-28 product decision): applying while chats
-            // are active silently becomes "apply when idle" — the user asked
-            // for automatic, the gate enforces when it's actually safe.
-            queueIdleApply(reason: "\(activeSessions) chat(s) active — will apply automatically when they go quiet")
-            return
-        }
-        applyUpdate(force: false)
-    }
-
-    private func queueIdleApply(reason: String) {
-        if !autoApply {
-            autoApply = true   // flips flag + UserDefaults via didSet/syncFlagFile
-            lastLine = "Queued: \(reason)."
-        } else {
-            lastLine = "Already queued: \(reason)."
-        }
-        notify("Apply & Restart queued", reason)
+        // 2026-08-29 revision of the 08-28 "silent queue" experiment: the silent
+        // queue made an explicit user command look like a no-op ("nothing
+        // happened, just notifications"). Apply & Restart is the user's own
+        // demand — the cycle gracefully quits the GUI + drains the backend by
+        // itself, so ALWAYS run it right away. Auto-apply's quiet-window path
+        // is the answer for updates the user did NOT initiate.
+        applyUpdate(force: true)
     }
 
     func applyUpdate(force: Bool) {
