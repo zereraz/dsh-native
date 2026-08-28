@@ -15,6 +15,15 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
 
+# GUI-launched PATH (app menu / menubar extra) has no nvm — node/pnpm/git
+# would be invisible and the script would die mid-pipeline with a polite
+# error message. Anchor them where the supervisor plist anchors node.
+if ! command -v node >/dev/null 2>&1; then
+  NVM_CANDIDATES="${DSH_NVM_BIN:-$HOME/.nvm/versions/node/v22.22.3/bin}"
+  [ -x "$NVM_CANDIDATES/node" ] || NVM_CANDIDATES="/opt/homebrew/bin"
+  export PATH="$NVM_CANDIDATES:$PATH"
+fi
+
 # Point HARNESS_REPO at your local deepseek-harness checkout (git, not npm).
 HARNESS="${HARNESS_REPO:?set HARNESS_REPO to your deepseek-harness checkout, e.g. export HARNESS_REPO=~/Code/deepseek-harness}"
 APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

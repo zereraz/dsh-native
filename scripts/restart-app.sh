@@ -25,9 +25,23 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
 
+# GUI-launched PATH (menubar extra / app menu / launchd) has no nvm — node is
+# invisible. Anchor it the same way the supervisor plist does; LAST of the
+# user-visible failures was precisely this class (flock-bin absence).
+if ! command -v node >/dev/null 2>&1; then
+  NVM_CANDIDATES="${DSH_NVM_BIN:-$HOME/.nvm/versions/node/v22.22.3/bin}"
+  [ -x "$NVM_CANDIDATES/node" ] || NVM_CANDIDATES="/opt/homebrew/bin"
+  export PATH="$NVM_CANDIDATES:$PATH"
+fi
+command -v node >/dev/null 2>&1 || { echo "node not found even after nvm/homebrew fallback" >&2; exit 1; }
+[ -f "$HOME/Library/LaunchAgents/com.zereraz.dsh-app.plist" ] || { echo "launchd plist missing — nothing to bootstrap" >&2; exit 1; }
+
 DOMAIN="gui/$(id -u)"
 APP_NAME="DeepSeek Harness"
-APP_BIN="Contents/MacOS/dsh-native"
+# pgrep -f is global: tests MUST override with a sandbox-only string; the real
+# app's binary path appearing in a *test* command line has killed the user's
+# GUI before (2026-08-28 lesson — the very class this file guards).
+APP_BIN="${APP_BIN:-Contents/MacOS/dsh-native}"
 SUP_PATTERN="supervisor/dsh-web.mjs"
 WEB_PATTERN="dsh/lib/bin.js web"
 PORT="${PORT:-41730}"
@@ -110,7 +124,10 @@ if [ "$(http)" != 200 ]; then
   echo "FATAL: rollback also failed health check. Manual repair." >&2; exit 1
 fi
 
-WEB_PID=$(pgrep -f "$WEB_PATTERN" | head -1)
+# pgrep no-match exits 1; with set -e a bare assignment of a failing $(...)
+# aborts the script AFTER a fully healthy relaunch (found by mock tracing
+# 2026-08-28). The PID is cosmetic data — never fatal.
+WEB_PID=$(pgrep -f "$WEB_PATTERN" | head -1 || true)
 say "up: port $PORT 200, web pid $WEB_PID"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/verify-ptc.mjs" ]; then
