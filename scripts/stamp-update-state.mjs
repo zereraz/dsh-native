@@ -34,7 +34,9 @@ let old = {}
 try { old = JSON.parse(readFileSync(stateFile, 'utf8')) } catch { /* fresh */ }
 const next = {
   version,
-  installedAt: action === 'applied' ? old.installedAt : (old.installedAt ?? now),
+  // an install IS a new install — always refresh installedAt;
+  // only the 'applied' stamp keeps it (and stamps appliedAt=now)
+  installedAt: action === 'applied' ? old.installedAt : now,
   appliedAt: action === 'applied' ? now : (action === 'installed' ? null : old.appliedAt),
   lastAction: action,
   lastActionStatus: `${action}${action === 'installed' ? ` v${version}` : ''}`,
