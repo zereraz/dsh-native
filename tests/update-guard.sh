@@ -74,4 +74,20 @@ vA=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$AA/Content
 vR=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$HOME/Applications/dsh-app-rollback.app/Contents/Info.plist" 2>/dev/null || echo '?')
 [ -n "$vA" ] && ok "install: app v$vA / rollback v$vR" || bad "install: version unreadable"
 
+# 8. preset completeness: all four shipped presets present in BOTH runtime
+#    copies, and minimal actually mounts compaction-basic (dsh-local fix; a
+#    bundle that only has minimal/ would silently lose ptc/standard again).
+for root in \
+  "/Applications/DeepSeek Harness.app/Contents/Resources/supervisor/node_modules/@deepseek-ai/dsh-agent-presets/presets" \
+  "$HOME/.pocket-server/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-presets/presets"; do
+  missing=""
+  for p in cordis minimal ptc standard; do
+    [ -d "$root/$p" ] || missing="$missing $p"
+  done
+  [ -z "$missing" ] && ok "presets complete: $root" || bad "presets MISSING:$missing in $root"
+  mf="$root/minimal/agent.cordis.yml"
+  [ -f "$mf" ] || bad "presets: minimal preset missing in $root"
+  grep -q "compaction-basic" "$mf" 2>/dev/null && ok "minimal mounts compaction: $root" || bad "minimal LACKS compaction-basic: $root"
+done
+
 exit $fail
