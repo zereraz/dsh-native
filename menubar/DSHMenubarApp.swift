@@ -142,11 +142,23 @@ final class MenubarModel: ObservableObject {
 
     func applyUpdateTapped() {
         if activeSessions > 0 {
-            confirm("\(activeSessions) chat(s) are active",
-                    "Restarting now interrupts their in-flight runs. Force anyway?") { [weak self] yes in
-                if yes { self?.applyUpdate(force: true) }
-            }
-        } else { applyUpdate(force: false) }
+            // No dialogs (2026-08-28 product decision): applying while chats
+            // are active silently becomes "apply when idle" — the user asked
+            // for automatic, the gate enforces when it's actually safe.
+            queueIdleApply(reason: "\(activeSessions) chat(s) active — will apply automatically when they go quiet")
+            return
+        }
+        applyUpdate(force: false)
+    }
+
+    private func queueIdleApply(reason: String) {
+        if !autoApply {
+            autoApply = true   // flips flag + UserDefaults via didSet/syncFlagFile
+            lastLine = "Queued: \(reason)."
+        } else {
+            lastLine = "Already queued: \(reason)."
+        }
+        notify("Apply & Restart queued", reason)
     }
 
     func applyUpdate(force: Bool) {
@@ -232,17 +244,6 @@ final class MenubarModel: ObservableObject {
         try? p.run()
     }
 
-    private func confirm(_ title: String, _ body: String, _ cb: @escaping (Bool) -> Void) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", "button returned of (display dialog \"\(body)\" with title \"\(title)\" buttons {\"Wait\", \"Force restart\"} default button \"Wait\")"]
-        let pipe = Pipe(); p.standardOutput = pipe
-        p.terminationHandler = { _ in
-            let t = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            Task { @MainActor in cb(t.contains("Force restart")) }
-        }
-        try? p.run()
-    }
 }
 
 // MARK: UI
