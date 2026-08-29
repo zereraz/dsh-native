@@ -5,19 +5,42 @@ const native_sdk = @import("native_sdk");
 pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
 const UI_URL = "http://127.0.0.1:41730/";
+const WEB_URL_FILE = "/Users/zereraz/.dsh/web-url.txt";
 const SHELL_ROOT = "/Users/zereraz/Code/Zereraz/voice/apps/dsh-shell";
 const LOG = "/Users/zereraz/.dsh/menubar.log";
+
+// The supervisor writes the authoritative URL (alpha+: carries the session
+// token) to WEB_URL_FILE as soon as boots land. Resolve it dynamically so the
+// native window loads exactly the session URL the server authenticated.
+var url_buf: [512]u8 = undefined;
+fn resolveUiUrl(io: std.Io) []const u8 {
+    // ~20s tolerance for cold boots; beyond that the plain URL is the least-bad
+    // choice (older bundles never write the file).
+    var waited_ms: u64 = 0;
+    while (waited_ms < 20_000) : (waited_ms += 200) {
+        if (std.Io.Dir.cwd().readFileAlloc(io, WEB_URL_FILE, std.heap.page_allocator, .limited(2048))) |raw| {
+            const url = std.mem.trimEnd(u8, raw, "\r\n ");
+            if (url.len > 7 and url.len <= url_buf.len) {
+                @memcpy(url_buf[0..url.len], url);
+                return url_buf[0..url.len];
+            }
+        } else |_| {}
+        std.Io.sleep(io, std.Io.Duration.fromMilliseconds(200), .awake) catch {};
+    }
+    return UI_URL;
+}
 // Menus are declared in app.zon (manifest owns product chrome; main.zig owns
 // native behavior): the .command strings come back through handleEvent.
 
 const App = struct {
     io: std.Io,
+    ui_url: []const u8 = UI_URL,
 
     fn app(self: *@This()) native_sdk.App {
         return .{
             .context = self,
             .name = "dsh-native",
-            .source = native_sdk.WebViewSource.url(UI_URL),
+            .source = native_sdk.WebViewSource.url(self.ui_url),
             .source_fn = source,
             .event_fn = handleEvent,
         };
@@ -25,8 +48,7 @@ const App = struct {
 
     fn source(context: *anyopaque) anyerror!native_sdk.WebViewSource {
         const self: *@This() = @ptrCast(@alignCast(context));
-        _ = self;
-        return native_sdk.WebViewSource.url(UI_URL);
+        return native_sdk.WebViewSource.url(self.ui_url);
     }
 
     fn handleEvent(context: *anyopaque, runtime: *native_sdk.Runtime, event: native_sdk.Event) anyerror!void {
@@ -72,17 +94,22 @@ fn run(io: std.Io, script: []const u8) void {
     _ = child.wait(io) catch {};
 }
 
-const dev_origins = [_][]const u8{ "zero://app", "zero://inline", UI_URL };
+const dev_origins = [_][]const u8{ "zero://app", "zero://inline", "http://127.0.0.1:41730" };
+const external_urls = [_][]const u8{"*"};
 
 pub fn main(init: std.process.Init) !void {
-    var app = App{ .io = init.io };
+    const url = resolveUiUrl(init.io);
+    var app = App{ .io = init.io, .ui_url = url };
     try runner.runWithOptions(app.app(), .{
         .app_name = "DeepSeek Harness",
         .window_title = "DeepSeek Harness",
         .bundle_id = "com.zereraz.dsh-native",
         .icon_path = "assets/icon.png",
         .security = .{
-            .navigation = .{ .allowed_origins = &dev_origins },
+            .navigation = .{
+                .allowed_origins = &dev_origins,
+                .external_links = .{ .action = .open_system_browser, .allowed_urls = &external_urls },
+            },
         },
     }, init);
 }

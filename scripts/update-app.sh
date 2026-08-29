@@ -57,10 +57,18 @@ DSH_HOME=/tmp/dsh-gate-home node "$SUP/node_modules/@deepseek-ai/dsh/lib/bin.js"
   web --host 127.0.0.1 --port "$GATE_PORT" --trusted-host "127.0.0.1:$GATE_PORT" --no-open >"$GATE_LOG" 2>&1 &
 GATE_PID=$!
 trap 'kill $GATE_PID 2>/dev/null || true' EXIT
+# dsh-local fix (alpha+): bare GET / is 401 on token-gated runtimes — resolve
+# the authoritative URL from the boot line and follow it through a cookie jar.
+jar=/tmp/dsh-gate-jar.txt
 for i in $(seq 1 40); do
   sleep 1
+  weburl=$(sed -n 's/^dsh web: \(http:\/\/[^ ]*\).*/\1/p' "$GATE_LOG" 2>/dev/null | head -1)
+  if [ -n "$weburl" ]; then
+    page="$(curl -sL -c "$jar" -b "$jar" -m 5 "$weburl" 2>/dev/null || true)"
+    [ -n "$page" ] && break
+  fi
   page="$(curl -s -m 2 "http://127.0.0.1:$GATE_PORT/" 2>/dev/null || true)"
-  [ -n "$page" ] && break
+  printf '%s' "$page" | grep -q '__DSH_BOOT__' && break
 done
 bundle_ok=1
 curl -s -m 2 -o /dev/null "http://127.0.0.1:$GATE_PORT/plugins/@deepseek-ai/dsh-client-modules/client.js" || bundle_ok=0

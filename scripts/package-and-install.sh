@@ -81,8 +81,22 @@ GATE_HOME="$(mktemp -d /tmp/dsh-gate-XXXXXX)"
 DSH_HOME="$GATE_HOME" node "$SUP/node_modules/@deepseek-ai/dsh/lib/bin.js" \
   web --host 127.0.0.1 --port "$GATE_PORT" --trusted-host "127.0.0.1:$GATE_PORT" --no-open >"$GATE_HOME/boot.log" 2>&1 &
 GATE_PID=$!
+# dsh-local fix (alpha+): bare GET / is 401 — the authoritative URL WITH the
+# session token comes only from the boot line `dsh web: <url>`. Extract it, then
+# follow through a cookie jar (303 → Set-Cookie → 200 with the boot graph).
 page=""
-for _ in $(seq 1 40); do page="$(curl -s -m 2 "http://127.0.0.1:$GATE_PORT/" 2>/dev/null || true)"; [ -n "$page" ] && break; sleep 1; done
+jar="$GATE_HOME/jar.txt"
+for _ in $(seq 1 40); do
+  weburl=$(sed -n 's/^dsh web: \(http:\/\/[^ ]*\).*/\1/p' "$GATE_HOME/boot.log" 2>/dev/null | head -1)
+  if [ -n "$weburl" ]; then
+    page="$(curl -sL -c "$jar" -b "$jar" -m 5 "$weburl" 2>/dev/null || true)"
+    [ -n "$page" ] && break
+  fi
+  # legacy runtimes (no token): still serve plain /
+  page="$(curl -s -m 2 "http://127.0.0.1:$GATE_PORT/" 2>/dev/null || true)"
+  printf '%s' "$page" | grep -q '__DSH_BOOT__' && break
+  sleep 1
+done
 kill "$GATE_PID" 2>/dev/null || true
 printf '%s' "$page" | grep -q '__DSH_BOOT__'     || { echo "GATE FAIL: no boot graph (log: $GATE_HOME/boot.log)" >&2; exit 1; }
 printf '%s' "$page" | grep -q '__ModuleLoader__=' || { echo "GATE FAIL: facade script missing (would boot to 'Failed to load plugins')" >&2; exit 1; }

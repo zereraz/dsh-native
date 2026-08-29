@@ -123,7 +123,7 @@ final class MenubarModel: ObservableObject {
 
     func openWeb() {
         let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        p.arguments = ["http://127.0.0.1:41730"]
+        p.arguments = [liveURL()]
         try? p.run()
     }
 
@@ -192,9 +192,20 @@ final class MenubarModel: ObservableObject {
         return n
     }
 
+    /// The authoritative URL (alpha+ includes the session token) is written by
+    /// the supervisor: use it when present — bare "/" is 401 on gated hosts.
+    private func liveURL() -> String {
+        let p = NSHomeDirectory() + "/.dsh/web-url.txt"
+        if let raw = try? String(contentsOfFile: p) {
+            let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.hasPrefix("http") { return t }
+        }
+        return "http://127.0.0.1:41730/"
+    }
+
     private func healthCheck() async -> Int {
         await withCheckedContinuation { cont in
-            var req = URLRequest(url: URL(string: "http://127.0.0.1:41730/")!)
+            var req = URLRequest(url: URL(string: liveURL())!)
             req.timeoutInterval = 3
             URLSession.shared.dataTask(with: req) { _, resp, _ in
                 cont.resume(returning: (resp as? HTTPURLResponse)?.statusCode ?? 0)

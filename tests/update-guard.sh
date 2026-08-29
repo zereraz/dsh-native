@@ -90,4 +90,27 @@ for root in \
   grep -q "compaction-basic" "$mf" 2>/dev/null && ok "minimal mounts compaction: $root" || bad "minimal LACKS compaction-basic: $root"
 done
 
+# 9. known-ghost census (twice bitten today): the bundle must always carry the
+#    pi-ai LLM dependency trio AND the client-runtime loader pair the module
+#    table compiles against. These silently shed across swaps (2026-08-29).
+G_SUP="/Applications/DeepSeek Harness.app/Contents/Resources/supervisor"
+for ghost in "node_modules/openai" "node_modules/@google/genai" "node_modules/@mistralai/mistralai"; do
+  [ -d "$G_SUP/$ghost" ] && ok "ghost: $ghost present" || bad "ghost: MISSING $ghost"
+done
+for ghost in "node_modules/@deepseek-ai/dsh-client-runtime/lib/index.js" "node_modules/@deepseek-ai/dsh-client-runtime/lib/client.js"; do
+  [ -f "$G_SUP/$ghost" ] && ok "ghost: $(basename $ghost) present" || bad "ghost: MISSING $ghost"
+done
+node --input-type=module -e "await import('$G_SUP/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js')" 2>/dev/null \
+  && ok "ghost: pi-ai openai-completions importable" || bad "ghost: pi-ai import broken"
+# client.js is a BROWSER-wrapped module table (window-based); a plain node
+# import is a false negative. The decisive check: every require() INSIDE it
+# resolves against the supervisor's node_modules.
+ghost_out=$(python3 -c "
+import re, subprocess, sys
+src=open('$G_SUP/node_modules/@deepseek-ai/dsh-client-runtime/lib/client.js', errors='replace').read()
+bad=[r for r in set(re.findall(r'require\"(\w[^\"]*)\"', src))
+     if subprocess.run(['node','-e','require.resolve(sys.argv[1], {paths:[sys.argv[2]]})', r, '$G_SUP'], capture_output=True).returncode]
+sys.exit(1 if bad else 0)
+" 2>/dev/null) && ok "ghost: client-runtime table requires resolve" || bad "ghost: client-runtime table dangles"
+
 exit $fail

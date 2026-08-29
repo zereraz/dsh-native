@@ -66,6 +66,9 @@ say() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*"; }
 # below ALWAYS burned 15s and exit-1'd with "still answering over a zombie"
 # on an empty port. The original || guard was redundant; drop it.
 http() { curl -sS -o /dev/null -m 2 -w '%{http_code}' "$HOST_URL/" 2>/dev/null || true; }
+# dsh-local fix (alpha+): gated hosts answer 401/303 on bare "/" — treat those
+# as ALIVE too, so the drain decision stays exact: 200/303/401 = up; 000 = down.
+alive() { local c; c="$(http)"; [ "$c" = "200" ] || [ "$c" = "303" ] || [ "$c" = "401" ]; }
 
 # --- 0. activity gate -------------------------------------------------------
 MAPFILE=()
@@ -111,16 +114,16 @@ sleep 1
 say "relaunching"
 launchctl bootstrap "$DOMAIN" "$HOME/Library/LaunchAgents/com.zereraz.dsh-app.plist" 2>/dev/null \
   || launchctl kickstart "$DOMAIN/com.zereraz.dsh-app"
-for _ in $(seq 1 40); do [ "$(http)" = 200 ] && break; sleep 1; done
+for _ in $(seq 1 40); do alive && break; sleep 1; done
 
 # --- 4. verify or rollback --------------------------------------------------
-if [ "$(http)" != 200 ]; then
+if ! alive; then
   say "HEALTH FAIL after relaunch — swapping rollback back in"
   [ -d "$ROLLBACK" ] || { echo "no rollback copy at $ROLLBACK — manual repair needed" >&2; exit 1; }
   rm -rf "$DST"; ditto "$ROLLBACK" "$DST"
   launchctl kickstart -k "$DOMAIN/com.zereraz.dsh-app"
-  for _ in $(seq 1 40); do [ "$(http)" = 200 ] && break; sleep 1; done
-  [ "$(http)" = 200 ] && { echo "ROLLED BACK and serving. Investigate before retrying." >&2; exit 1; }
+  for _ in $(seq 1 40); do alive && break; sleep 1; done
+  alive && { echo "ROLLED BACK and serving. Investigate before retrying." >&2; exit 1; }
   echo "FATAL: rollback also failed health check. Manual repair." >&2; exit 1
 fi
 
@@ -128,7 +131,7 @@ fi
 # aborts the script AFTER a fully healthy relaunch (found by mock tracing
 # 2026-08-28). The PID is cosmetic data — never fatal.
 WEB_PID=$(pgrep -f "$WEB_PATTERN" | head -1 || true)
-say "up: port $PORT 200, web pid $WEB_PID"
+say "up: port $PORT alive ($(http)), web pid $WEB_PID"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/verify-ptc.mjs" ]; then
   node "$SCRIPT_DIR/verify-ptc.mjs" && say "PTC smoke: OK" || say "PTC smoke: WARN (see above) — old build still healthy enough to report"

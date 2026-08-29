@@ -6,7 +6,7 @@
 // Native SDK dev runner kills this process tree on shell exit.
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -15,6 +15,10 @@ const PORT = 41730;
 const HOST = '127.0.0.1';
 const DSH_HOME = join(homedir(), '.dsh');
 const here = dirname(fileURLToPath(import.meta.url));
+// The official boot line (`dsh web: http://IP:PORT/?token=…`) is the readiness
+// signal AND (alpha+) carries the session credential. We persist the exact URL
+// for every local consumer: the native window, menubar health check, gates.
+const WEB_URL_FILE = process.env.DSH_WEB_URL_FILE || join(DSH_HOME, 'web-url.txt');
 
 // Resolve the dsh CLI from the supervisor's own node_modules.
 const require = createRequire(import.meta.url);
@@ -75,8 +79,25 @@ const env = {
 const child = spawn(
   process.execPath,
   ['--expose-internals', dshBin, 'web', '--host', HOST, '--port', String(PORT), '--trusted-host', `${HOST}:${PORT}`, '--no-open'],
-  { env, stdio: 'inherit' },
+  { env, stdio: ['ignore', 'pipe', 'inherit'] },
 );
+
+// The ready line may arrive split across chunk boundaries; keep one small
+// rolling buffer and scan it.
+let scan = '';
+const BOOT_LINE = /dsh web: (http:\/\/[^\s]+)/;
+child.stdout.on('data', (buf) => {
+  process.stdout.write(buf);
+  scan = (scan + buf.toString('utf8')).slice(-65536);
+  const m = scan.match(BOOT_LINE);
+  if (m) {
+    const tmp = WEB_URL_FILE + '.tmp';
+    writeFileSync(tmp, m[1] + '\n');
+    renameSync(tmp, WEB_URL_FILE);
+    scan = '';
+  }
+});
+child.stdout.on('error', () => {});
 
 child.on('exit', (code) => process.exit(code ?? 0));
 for (const sig of ['SIGINT', 'SIGTERM']) {
