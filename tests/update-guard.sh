@@ -113,4 +113,13 @@ bad=[r for r in set(re.findall(r'require\"(\w[^\"]*)\"', src))
 sys.exit(1 if bad else 0)
 " 2>/dev/null) && ok "ghost: client-runtime table requires resolve" || bad "ghost: client-runtime table dangles"
 
+# 10. SDK-census: @native-sdk/cli pinned-in-sync across the three install
+#     points + the menu-merge patch always already on the disc copy.
+LATEST=$(npm view @native-sdk/cli version 2>/dev/null || echo "?")
+for sdk in "$HOME/.nvm/versions/node/v22.22.3/lib/node_modules/@native-sdk/cli" "$HOME/.pocket-server/lib/node_modules/@native-sdk/cli"; do
+  v=$(node -p "require('$sdk/package.json').version" 2>/dev/null)
+  [ "$v" = "$LATEST" ] && ok "sdk: $v (=npm latest) at $(basename $(dirname $sdk))" || bad "sdk: $v (!= latest $LATEST) at $(basename $(dirname $sdk))"
+  grep -q "dsh-local fix" "$sdk/src/platform/macos/appkit_host.m" 2>/dev/null     && ok "sdk: menu-merge patched at $(basename $(dirname $sdk))" || bad "sdk: host UNPATCHED at $(basename $(dirname $sdk))"
+done
+
 exit $fail

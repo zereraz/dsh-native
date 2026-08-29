@@ -128,3 +128,22 @@ H. **Menubar extra**: SwiftUI MenuBarExtra app (~180 lines, no Xcode project,
   embedded-app auth handoff (or upstream documents the token's local path).
 - DEBT: pipelines must fetch-with-token when the token becomes primary; the
   health gate's bare `curl /` will need the token URL from the boot log.
+
+## 2026-08-29 (v0.3.0): alpha rides the native app — everything lands in one quiet click
+**What shipped (installed, activation gated on the trusted cycle click):**
+- dsh-0.1.2-alpha.1 (all 77 upstream feature commits + 255 fixes), verified
+  cookie-authend boot graph at install gate — token-gated runtime now serves
+  the webview correctly (the pin of 2026-08-28 lifted by engineering, not a
+  hoping-upstream contract).
+- **External links actually open** (system browser): root cause was one
+  dropped security-policy field, silently `deny` since day one; fixed at the
+  zig compile layer — the fix routes through the SDK's own
+  `ExternalLinkPolicy` structs correctly (no new host patches needed).
+- Supervisors publish the authoritative URL at `~/.dsh/web-url.txt`; the
+  zig app resolves it dynamically at startup; gates + menubar read it.
+- All the week's solidifications remain: census of 23, guard battery 12,
+  hermetic cycle battery 9, terse-full minimal preset, retry `always`.
+
+**The one-click contract (audited today):** Apply & Restart = quit GUI, drain
+backend, boot the asset, cookie-authenticated health check, re-open itself.
+Silence on success; one alert ONLY on failure. No other notifications exist.

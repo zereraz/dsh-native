@@ -93,7 +93,7 @@ grep -q "exit=3" <<< "$out" && grep -q "ACTIVITY: 1 session" <<< "$out" \
 touch "$T/bootstrap-ok"
 out=$(RUN --force --idle 0 2>&1)
 grep -q "exit=0" <<< "$out" && grep -q "bootout gui.*/com.zereraz.dsh-app" "$T/launchctl.log" \
-  && grep -q "bootstrap gui" "$T/launchctl.log" && grep -q "up: port 41798 200" <<< "$out" \
+  && grep -q "bootstrap gui" "$T/launchctl.log" && grep -q "up: port 41798 alive" <<< "$out" \
   && ok "3 happy path full cycle" || bad "3 happy: $(echo "$out" | tail -4); log: $(cat $T/launchctl.log)"
 node -e "
 const s=JSON.parse(require('fs').readFileSync('$HOME_F/.dsh/update-state.json','utf8'))
