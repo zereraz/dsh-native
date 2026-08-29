@@ -136,7 +136,7 @@ final class MenubarModel: ObservableObject {
             let tail = lastLines(out, 2)
             lastLine = code == 0 ? "Update installed — restart to apply." : "Update FAILED (log: ~/.dsh/menubar.log)"
             poll()
-            notify(code == 0 ? "DSH update installed" : "DSH update failed", tail)
+            if code != 0 { notify("DSH update failed", tail) }
         }
     }
 
@@ -160,7 +160,7 @@ final class MenubarModel: ObservableObject {
             let tail = lastLines(out, 2)
             lastLine = code == 0 ? "Applied & verified." : (tail.isEmpty ? "Apply failed (log)" : tail)
             poll()
-            notify(code == 0 ? "DSH restart done" : "DSH restart failed", tail)
+            if code != 0 { notify("DSH restart failed", tail) }
         }
     }
 
