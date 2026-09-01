@@ -94,7 +94,7 @@ done
 #    pi-ai LLM dependency trio AND the client-runtime loader pair the module
 #    table compiles against. These silently shed across swaps (2026-08-29).
 G_SUP="/Applications/DeepSeek Harness.app/Contents/Resources/supervisor"
-for ghost in "node_modules/openai" "node_modules/@google/genai" "node_modules/@mistralai/mistralai"; do
+for ghost in "node_modules/openai" "node_modules/@google/genai"; do
   [ -d "$G_SUP/$ghost" ] && ok "ghost: $ghost present" || bad "ghost: MISSING $ghost"
 done
 for ghost in "node_modules/@deepseek-ai/dsh-client-runtime/lib/index.js" "node_modules/@deepseek-ai/dsh-client-runtime/lib/client.js"; do

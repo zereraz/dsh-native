@@ -3,7 +3,7 @@
 // node_modules: the CLI package + every @deepseek-ai/* package whose name
 // exists on the target, each per its own `files` field. No registry calls.
 import { execSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, copyFileSync, cpSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, copyFileSync, cpSync, realpathSync } from 'node:fs'
 import { join, basename, dirname } from 'node:path'
 
 const [harness, sup] = process.argv.slice(2)
@@ -158,6 +158,52 @@ function alignDep(name, fromDir) {
   } catch (e) { console.log(`  note: ${name} unresolvable from repo (${e?.code ?? e?.message} — optional or bundled; gate decides)`) }
 }
 for (const [n, d] of depSources) alignDep(n, d)
+
+// dsh-local fix 2026-09-01: PNPM-SIBLING CLOSURE GRAFT. alignDep copies a
+// package subtree, but a pnpm-built workspace holds a package's declared deps
+// as *siblings* in the same .pnpm container — pi-ai's own node_modules is
+// literally ["@opentelemetry"], its LLM providers (openai, @google/genai,
+// @mistralai/mistralai …) sit one dir up. A bare copy of the subtree ships a
+// bundle that explodes at first LLM call with "Cannot find package 'openai'"
+// (2026-08-27 ghost + 2026-08-29 recurrence + 2026-09-01 red-flag again).
+// We graft the DECLARED list as real dirs from the container up to the
+// bundle's top level — the only correct lay for siblings.
+function graftPnpmSiblings(pkgName) {
+  // Resolve *through the dependent* — pi-ai isn't on the harness root's
+  // ancestor path. depSources already knows the dependent's package dir.
+  const fromDir = depSources.get(pkgName)
+  const req0 = fromDir ? createRequire(join(fromDir, 'r.cjs')) : null
+  let root = null
+  if (req0) {
+    try { root = dirname(req0.resolve(join(pkgName, 'package.json'))) }
+    catch {
+      try { let p = req0.resolve(pkgName); while (p && !existsSync(join(p, 'package.json'))) p = dirname(p); root = p }
+      catch { }
+    }
+  }
+  if (!root) root = lookupPkgDir(pkgName, fromDir ?? harness)
+  if (!root) { console.log(`  graft: ${pkgName} not found — skipping`); return }
+  let pkg
+  try { pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) } catch { return }
+  const pkgDir = dirname(realpathSync(join(root, 'package.json')))
+  const containerMods = dirname(dirname(pkgDir))
+  const req = createRequire(join(root, 'r.cjs'))
+  for (const dep of Object.keys(pkg.dependencies ?? {})) {
+    if (dep.startsWith('@deepseek-ai/')) continue
+    const dst = join(supMods, ...dep.split('/'))
+    if (existsSync(join(dst, 'package.json'))) continue
+    let src = null
+    try { src = dirname(req.resolve(dep + '/package.json')) } catch { }
+    if (!src) {
+      const cand = join(containerMods, ...dep.split('/'))
+      if (existsSync(join(cand, 'package.json'))) src = cand
+    }
+    if (!src) { console.log(`  graft: cannot resolve ${dep} of ${pkgName}`); continue }
+    cpSync(src, dst, { recursive: true, dereference: true })
+    console.log(`  grafted ${dep} → top-level (closure of ${pkgName})`)
+  }
+}
+graftPnpmSiblings('@earendil-works/pi-ai')
 // koffi native sibling package: version must pair exactly
 const koffiDir = join(supMods, 'koffi')
 if (existsSync(koffiDir)) {
