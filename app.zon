@@ -2,7 +2,7 @@
     .id ="com.zereraz.dsh-native",
     .name = "dsh-native",
     .display_name = "DeepSeek Harness",
-    .version = "0.3.0",
+    .version = "0.3.1",
     .icons = .{ "assets/AppIcon.icns", "assets/icon.png" },
     .platforms = .{ "macos" },
     .permissions = .{},
