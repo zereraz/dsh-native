@@ -7,8 +7,7 @@
 //   - "Check & Update" runs scripts/update-app.sh in the background and posts a
 //     macOS notification with the outcome
 //   - "Apply & Restart" runs scripts/restart-app.sh (activity gate → graceful
-//     quit → drain → relaunch → health → rollback); with active chats it asks
-//     before forcing
+//     quit → drain → relaunch → health → rollback); reload respects recent activity
 //   - "Auto-apply when idle" restarts by itself once an update is installed and
 //     no chat has written to its log for 10 minutes
 //
@@ -21,6 +20,16 @@ struct UpdateState: Codable {
     var appliedAt: Date?
     var lastAction: String?
     var lastActionStatus: String?
+}
+
+struct PluginStatus: Decodable, Identifiable {
+    var name: String
+    var source: String
+    var revision: String
+    var detail: String
+    var canBuild: Bool
+    var staged: Bool
+    var id: String { name }
 }
 
 enum HostHealth { case up, down, checking }
@@ -42,6 +51,7 @@ let isoDate: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-
 @MainActor
 final class MenubarModel: ObservableObject {
     @Published var state = UpdateState()
+    @Published var stagedAppVersion: String?
     @Published var health: HostHealth = .checking
     @Published var lastLine = ""
     @Published var activeSessions = 0
@@ -64,11 +74,34 @@ final class MenubarModel: ObservableObject {
         try? (autoApply ? "1" : "0").write(toFile: autoApplyFlagFile, atomically: true, encoding: .utf8)
     }
 
+    @Published var plugins: [PluginStatus] = []
+    @Published private(set) var pluginRunning = false
+    @Published private(set) var pluginMessage = ""
+    private var pluginLogs: [String: URL] = [:]
+    private var pluginPollRunning = false
     private var timer: Timer?
-    private var updateRunning = false
-    private var applyRunning = false
+    @Published private(set) var updateRunning = false
+    @Published private(set) var applyRunning = false
+    @Published private(set) var currentLog: URL?
+    private var pollRunning = false
+    private var attemptedAutoApply: String?
+    private var stagedAppPath: String?
+    var busy: Bool { updateRunning || applyRunning || pluginRunning }
+
+    init() {
+        let directory = URL(fileURLWithPath: NSHomeDirectory() + "/.dsh/menubar-runs")
+        let history = RunLogHistory.load(in: directory)
+        if let latest = history.latest, FileManager.default.fileExists(atPath: latest) {
+            currentLog = URL(fileURLWithPath: latest)
+        }
+        for (name, path) in history.plugins where FileManager.default.fileExists(atPath: path) {
+            pluginLogs[name] = URL(fileURLWithPath: path)
+        }
+        start()
+    }
 
     var needsApply: Bool {
+        if stagedAppVersion != nil { return true }
         guard let i = state.installedAt else { return false }
         guard let a = state.appliedAt else { return true }
         return a < i
@@ -81,13 +114,18 @@ final class MenubarModel: ObservableObject {
         }
     }
     var statusText: String {
+        if pluginRunning { return "Checking plugin…" }
+        if updateRunning { return "Building and checking update…" }
+        if applyRunning { return "Restarting DeepSeek Harness…" }
+        if let version = stagedAppVersion { return "v\(version) staged — reload to activate" }
         if health == .down { return "DeepSeek Harness host is down" }
         if needsApply, let v = state.version { return "v\(v) installed — restart to apply" }
-        if let v = state.version { return "v\(v) running" }
+        if let v = state.version { return "v\(v) applied" }
         return "Host up (no update state)"
     }
 
     func start() {
+        guard timer == nil else { return }
         poll()
         timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
@@ -95,6 +133,14 @@ final class MenubarModel: ObservableObject {
     }
 
     func poll() {
+        guard !pollRunning else { return }
+        pollRunning = true
+        refreshPlugins()
+        let candidateURL = URL(fileURLWithPath: NSHomeDirectory() + "/.dsh/app-candidate.json")
+        if let data = try? Data(contentsOf: candidateURL),
+           let candidate = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
+            stagedAppVersion = candidate["version"]; stagedAppPath = candidate["path"]
+        } else { stagedAppVersion = nil; stagedAppPath = nil }
         state = readState() ?? UpdateState()
         activeSessions = countActiveSessions(minutes: 10)
         // file flag wins (the app menu writes the file, not UserDefaults)
@@ -103,9 +149,11 @@ final class MenubarModel: ObservableObject {
             if flagOn != autoApply { autoApply = flagOn }
         }
         Task {
+            defer { pollRunning = false }
             let code = await healthCheck()
             health = (code == 200) ? .up : .down
-            if autoApply && health == .up && needsApply && activeSessions == 0 && !applyRunning && !updateRunning {
+            if autoApply && health == .up && needsApply && activeSessions == 0 && !busy && attemptedAutoApply != (stagedAppPath ?? state.installedAt?.description) {
+                attemptedAutoApply = stagedAppPath ?? state.installedAt?.description
                 applyUpdate(force: false)
             }
         }
@@ -128,39 +176,69 @@ final class MenubarModel: ObservableObject {
     }
 
     func checkUpdate() {
-        guard !updateRunning else { return }
+        guard !busy else { return }
         updateRunning = true; lastLine = "Updating: pull + build + gate…"
         Task {
-            let (out, code) = await runBash("HARNESS_REPO=\"$HOME/Code/ds4/deepseek-harness\" bash \"\(dshShellRoot())/scripts/update-app.sh\"")
+            let (out, code) = await runScript("update-app.sh", arguments: [])
             updateRunning = false
             let tail = lastLines(out, 2)
-            lastLine = code == 0 ? "Update installed — restart to apply." : "Update FAILED (log: ~/.dsh/menubar.log)"
+            lastLine = code == 0 ? "Update staged — reload when idle to activate." : "Update FAILED (log: ~/.dsh/menubar.log)"
             poll()
             if code != 0 { notify("DSH update failed", tail) }
         }
     }
 
-    func applyUpdateTapped() {
-        // 2026-08-29 revision of the 08-28 "silent queue" experiment: the silent
-        // queue made an explicit user command look like a no-op ("nothing
-        // happened, just notifications"). Apply & Restart is the user's own
-        // demand — the cycle gracefully quits the GUI + drains the backend by
-        // itself, so ALWAYS run it right away. Auto-apply's quiet-window path
-        // is the answer for updates the user did NOT initiate.
-        applyUpdate(force: true)
+    func applyUpdateTapped() { applyUpdate(force: false) }
+
+    func refreshPlugins() {
+        guard !pluginPollRunning && !busy else { return }
+        pluginPollRunning = true
+        Task {
+            defer { pluginPollRunning = false }
+            let log = URL(fileURLWithPath: NSHomeDirectory() + "/.dsh/menubar-runs/discovery.log")
+            let result = await CommandRunner.run(executable: "/bin/bash",
+                arguments: [dshShellRoot() + "/scripts/plugin-control.sh", "status"], logURL: log)
+            if result.1 == 0, let rows = try? JSONDecoder().decode([PluginStatus].self, from: Data(result.0.utf8)) {
+                plugins = rows; pluginMessage = ""
+            } else {
+                currentLog = log
+                let detail = result.1 == 0 ? "Unexpected discovery response" : lastLines(result.0, 2)
+                pluginMessage = "Plugin discovery failed (exit \(result.1)): \(detail). Open Log for details."
+            }
+        }
+    }
+
+    func preparePlugin(_ plugin: PluginStatus, update: Bool) {
+        guard !busy else { return }
+        pluginRunning = true
+        lastLine = "\(update ? "Updating" : "Building") \(plugin.name)…"
+        Task {
+            let result = await runScript("plugin-control.sh", arguments: [update ? "update" : "build", plugin.name])
+            if let log = currentLog { pluginLogs[plugin.name] = log }
+            pluginRunning = false
+            lastLine = result.1 == 0 ? "\(plugin.name) checked — Reload Backend to activate." : lastLines(result.0, 2)
+            if result.1 != 0 { notify("Plugin checks failed", lastLine) }
+            refreshPlugins()
+        }
+    }
+
+    func hasPluginLog(_ plugin: PluginStatus) -> Bool { pluginLogs[plugin.name] != nil }
+
+    func pluginLog(_ plugin: PluginStatus) {
+        if let log = pluginLogs[plugin.name] { NSWorkspace.shared.open(log) }
+        else { lastLine = "No build or update log for \(plugin.name) yet." }
     }
 
     func applyUpdate(force: Bool) {
-        guard !applyRunning else { return }
+        guard !busy else { return }
         applyRunning = true; lastLine = "Applying: graceful restart…"
         Task {
-            let flag = force ? "--force" : ""
-            let (out, code) = await runBash("bash \"\(dshShellRoot())/scripts/restart-app.sh\" \(flag)")
+            let (out, code) = await runScript("restart-app.sh", arguments: force ? ["--force"] : [])
             applyRunning = false
             let tail = lastLines(out, 2)
-            lastLine = code == 0 ? "Applied & verified." : (tail.isEmpty ? "Apply failed (log)" : tail)
+            lastLine = code == 0 ? "Backend reloaded — test the plugin in the app." : (tail.isEmpty ? "Reload failed — open log." : tail)
             poll()
-            if code != 0 { notify("DSH restart failed", tail) }
+            if code != 0 && code != 3 { notify("DSH reload failed", tail) }
         }
     }
 
@@ -196,9 +274,10 @@ final class MenubarModel: ObservableObject {
     /// the supervisor: use it when present — bare "/" is 401 on gated hosts.
     private func liveURL() -> String {
         let p = NSHomeDirectory() + "/.dsh/web-url.txt"
-        if let raw = try? String(contentsOfFile: p) {
+        if let raw = try? String(contentsOfFile: p, encoding: .utf8) {
             let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if t.hasPrefix("http") { return t }
+            if let url = URL(string: t), url.scheme == "http",
+               url.host == "127.0.0.1", url.port == 41730 { return t }
         }
         return "http://127.0.0.1:41730/"
     }
@@ -213,23 +292,23 @@ final class MenubarModel: ObservableObject {
         }
     }
 
-    private func runBash(_ cmd: String) async -> (String, Int32) {
-        await withCheckedContinuation { cont in
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/bin/bash")
-            p.arguments = ["-c", cmd]
-            // dsh-local fix 2026-08: the old form piped through "| tail -8",
-            // so terminationStatus was TAIL's (always 0) — every failed
-            // update/restart was reported to the user as success.
-            let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
-            p.terminationHandler = { proc in
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let text = String(data: data, encoding: .utf8) ?? ""
-                appendLog("=== \(isoDate.string(from: Date())): \(cmd)\n\(String(text.suffix(4000)))\nexit=\(proc.terminationStatus)")
-                cont.resume(returning: (text, proc.terminationStatus))
-            }
-            do { try p.run() } catch { cont.resume(returning: ("spawn failed: \(error)", 127)) }
-        }
+    private func runScript(_ name: String, arguments: [String]) async -> (String, Int32) {
+        let log = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".dsh/menubar-runs/\(UUID().uuidString).log")
+        currentLog = log
+        var environment = ProcessInfo.processInfo.environment
+        environment["HARNESS_REPO"] = NSHomeDirectory() + "/Code/ds4/deepseek-harness"
+        let result = await CommandRunner.run(executable: "/bin/bash",
+            arguments: [dshShellRoot() + "/scripts/" + name] + arguments,
+            environment: environment, logURL: log)
+        let plugin = name == "plugin-control.sh" && arguments.count > 1 ? arguments[1] : nil
+        try? RunLogHistory.record(log: log, plugin: plugin)
+        appendLog("=== \(isoDate.string(from: Date())): \(name)\nlog: \(log.path)\n\(String(result.0.suffix(4000)))\nexit=\(result.1)")
+        return result
+    }
+
+    func openLog() {
+        NSWorkspace.shared.open(currentLog ?? URL(fileURLWithPath: NSHomeDirectory() + "/.dsh/menubar-runs/discovery.log"))
     }
 
     private func lastLines(_ s: String, _ n: Int) -> String {
@@ -258,13 +337,35 @@ struct MenuContent: View {
             Divider()
             HStack {
                 Button("Open") { model.openApp() }
-                Button("Check & Update…") { model.checkUpdate() }
-                Button("Apply & Restart…") { model.applyUpdateTapped() }.disabled(!model.needsApply)
+                Button("Check & Update…") { model.checkUpdate() }.disabled(model.busy)
+                Button("Reload Backend") { model.applyUpdateTapped() }.disabled(model.busy)
             }
+            Text("Reload waits for recent chat activity to stop.").font(.caption2).foregroundStyle(.secondary)
+            Divider()
+            Text("Plugins").font(.headline)
+            if !model.pluginMessage.isEmpty { Text(model.pluginMessage).font(.caption) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(model.plugins) { plugin in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(plugin.name) · source \(plugin.revision)").font(.subheadline)
+                            Text(plugin.detail).font(.caption2).foregroundStyle(.secondary)
+                            HStack {
+                                Button("Build & Check") { model.preparePlugin(plugin, update: false) }.disabled(model.busy || !plugin.canBuild)
+                                Button("Update & Check") { model.preparePlugin(plugin, update: true) }.disabled(model.busy || !plugin.canBuild)
+                                Button("Log") { model.pluginLog(plugin) }.disabled(!model.hasPluginLog(plugin))
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: 230, alignment: .leading)
+            Button(model.currentLog == nil || model.currentLog?.lastPathComponent == "discovery.log" ? "Discovery Log" : "Latest Run Log") { model.openLog() }
             Toggle("Auto-apply when idle", isOn: $model.autoApply)
         }
         .padding(12)
-        .frame(width: 320)
+        .frame(width: 430)
         .onAppear { model.start() }
     }
 }

@@ -6,7 +6,7 @@ import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const SUP = '/Applications/DeepSeek Harness.app/Contents/Resources/supervisor'
+const SUP = process.env.DSH_APP_SUP || '/Applications/DeepSeek Harness.app/Contents/Resources/supervisor'
 const { Context } = await import(`${SUP}/node_modules/@deepseek-ai/cordis/lib/index.js`)
 const { WorkerThreadCodeRuntime } = await import(`${SUP}/node_modules/@deepseek-ai/dsh-code-runtime-worker-thread/lib/index.js`)
 

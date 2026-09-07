@@ -1,143 +1,120 @@
 #!/usr/bin/env bash
-# restart-app.sh — one-button graceful quit → relaunch → verify cycle for the
-# DeepSeek Harness native app. Run when a new build has been installed (usually
-# by update-app.sh step 6) and you want the running instance to pick it up
-# WITHOUT any of the historical footguns:
-#   - refuses to cycle while a chat wrote to its log recently (agents mid-run),
-#   - quits the WebView app short of force (osascript), THEN drains the launchd
-#     host, so no cleanup writes are raced by a swap,
-#   - waits for the backend to be fully down before relaunching (no zombie
-#     holding a deleted bundle as its cwd — the 2026-08-24 uv_cwd incident),
-#   - health-checks and PTC-smokes the new host; on failure swaps in the
-#     rollback copy and relaunches THAT, then says so loudly.
-#
-# Options:
-#   --force         skip the activity check anyway (agent IS the activity)
-#   --idle N        quiet-period minutes before cycling (default 5)
-#   --dry-run       print every step and the activity report; touch nothing
+# Idle-gated restart of the primary launchd job; other DSH hosts are never signaled.
 set -euo pipefail
-# Portable cross-url lock: mkdir is atomic everywhere (flock binary is absent
-# from launchd's minimal PATH — a missing flock binary used to be indistinguishable
-# from a held lock and gated runs forever).
-LOCKDIR="$HOME/.dsh/app-update.lock.d"
-if ! mkdir "$LOCKDIR" 2>/dev/null; then
-  echo "another update/apply runs (lock $LOCKDIR) — exiting" >&2; exit 4
-fi
-trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
-
-# GUI-launched PATH (menubar extra / app menu / launchd) has no nvm — node is
-# invisible. Anchor it the same way the supervisor plist does; LAST of the
-# user-visible failures was precisely this class (flock-bin absence).
-if ! command -v node >/dev/null 2>&1; then
-  NVM_CANDIDATES="${DSH_NVM_BIN:-$HOME/.nvm/versions/node/v22.22.3/bin}"
-  [ -x "$NVM_CANDIDATES/node" ] || NVM_CANDIDATES="/opt/homebrew/bin"
-  export PATH="$NVM_CANDIDATES:$PATH"
-fi
-command -v node >/dev/null 2>&1 || { echo "node not found even after nvm/homebrew fallback" >&2; exit 1; }
-[ -f "$HOME/Library/LaunchAgents/com.zereraz.dsh-app.plist" ] || { echo "launchd plist missing — nothing to bootstrap" >&2; exit 1; }
-
-DOMAIN="gui/$(id -u)"
-APP_NAME="DeepSeek Harness"
-# pgrep -f is global: tests MUST override with a sandbox-only string; the real
-# app's binary path appearing in a *test* command line has killed the user's
-# GUI before (2026-08-28 lesson — the very class this file guards).
-APP_BIN="${APP_BIN:-Contents/MacOS/dsh-native}"
-SUP_PATTERN="supervisor/dsh-web.mjs"
-WEB_PATTERN="dsh/lib/bin.js web"
-PORT="${PORT:-41730}"
-HOST_URL="http://127.0.0.1:$PORT"
-ROLLBACK="${ROLLBACK:-$HOME/Applications/dsh-app-rollback.app}"
+export PATH="${DSH_CONTROL_PATH:-$HOME/.nvm/versions/node/v22.22.3/bin:/opt/homebrew/bin}:$PATH"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DATA="${DSH_HOME:-$HOME/.dsh}"
 DST="${DST:-/Applications/DeepSeek Harness.app}"
-IDLE_MINUTES=5
-FORCE=0; DRY=0
+ROLLBACK="${ROLLBACK:-$HOME/Applications/dsh-app-rollback.app}"
+PORT="${PORT:-41730}"; export PORT
+JOB="gui/$(id -u)/com.zereraz.dsh-app"
+PLIST="$HOME/Library/LaunchAgents/com.zereraz.dsh-app.plist"
+IDLE=5; FORCE=0; DRY=0
 while [ $# -gt 0 ]; do
-  case "$1" in
-    --force) FORCE=1 ;;
-    --dry-run) DRY=1 ;;
-    --idle) IDLE_MINUTES="${2:?--idle needs minutes}"; shift ;;
-    *) echo "unknown flag: $1" >&2; exit 2 ;;
-  esac
-  shift
+ case "$1" in --force) FORCE=1;; --dry-run) DRY=1;; --idle) IDLE="${2:?missing minutes}"; shift;; *) echo "Unknown argument: $1" >&2; exit 2;; esac; shift
 done
-say() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*"; }
-# dsh-local fix: curl's -w %{http_code} ALREADY prints "000" when the
-# connection fails — so the trailing "|| echo 000" appended a SECOND 000,
-# making $(http) "000\n000", which never matched [ = 000 ]. The drain loop
-# below ALWAYS burned 15s and exit-1'd with "still answering over a zombie"
-# on an empty port. The original || guard was redundant; drop it.
-http() { curl -sS -o /dev/null -m 2 -w '%{http_code}' "$HOST_URL/" 2>/dev/null || true; }
-# dsh-local fix (alpha+): gated hosts answer 401/303 on bare "/" — treat those
-# as ALIVE too, so the drain decision stays exact: 200/303/401 = up; 000 = down.
-alive() { local c; c="$(http)"; [ "$c" = "200" ] || [ "$c" = "303" ] || [ "$c" = "401" ]; }
-
-# --- 0. activity gate -------------------------------------------------------
-MAPFILE=()
-while IFS= read -r f; do MAPFILE+=("$f"); done < <(find "$HOME/.dsh/sessions" -name 'session.jsonl.zstd' -newermt "-${IDLE_MINUTES} minutes" 2>/dev/null)
-if [ "${#MAPFILE[@]}" -gt 0 ] && [ "$FORCE" = 0 ]; then
-  say "ACTIVITY: ${#MAPFILE[@]} session(s) wrote within ${IDLE_MINUTES}m:"
-  printf '       %s\n' "${MAPFILE[@]}" | sed "s|$HOME/.dsh/sessions/||"
-  if [ "$DRY" = 0 ]; then
-    echo "cycling now kills their in-flight runs. Re-run with --force or wait; aborting." >&2
-    exit 3
-  fi
+case "$IDLE" in ''|*[!0-9]*) echo 'Idle minutes must be a non-negative integer' >&2; exit 2;; esac
+[ -f "$PLIST" ] || { echo 'Primary launchd plist missing' >&2; exit 1; }
+# Missing/unreadable session state must not be interpreted as idle.
+[ -d "$DATA/sessions" ] || { echo 'Session directory missing; cannot determine activity' >&2; exit 1; }
+ACTIVITY=$(find "$DATA/sessions" -type f \( -name 'session.jsonl.zstd' -o -name 'session.jsonl' \) -mmin "-$IDLE")
+if [ -n "$ACTIVITY" ] && [ "$FORCE" = 0 ]; then
+ echo 'Recent chat activity: reload deferred. Wait for chats to finish, then retry.'
+ [ "$DRY" = 1 ] || exit 3
 fi
-
 if [ "$DRY" = 1 ]; then
-  say "DRY-RUN plan:"
-  say "  1. osascript: tell application \"$APP_NAME\" to quit   (graceful GUI)"
-  say "  2. launchctl bootout $DOMAIN/com.zereraz.dsh-app     (drain backend)"
-  say "  3. wait for :$PORT to stop + no $WEB_PATTERN processes"
-  say "  4. launchctl bootstrap $DOMAIN ~/Library/LaunchAgents/com.zereraz.dsh-app.plist"
-  say "  5. wait for :$PORT to answer 200 (<40s)"
-  say "  6. scripts/verify-ptc.mjs against the live bundle"
-  say "  7. on any health failure: swap $ROLLBACK back into place and relaunch"
-  exit 0
+ echo "DRY-RUN: quit native window; bootout $JOB; wait for port $PORT to close; activate staged plugins; bootstrap; authenticated readiness + PTC; rollback on failure."
+ exit 0
 fi
-
-# --- 1. graceful GUI quit ---------------------------------------------------
-if pgrep -f "$APP_BIN" >/dev/null; then
-  say "quitting $APP_NAME (graceful)"
-  osascript -e "tell application \"$APP_NAME\" to quit" >/dev/null 2>&1 || true
-  for _ in $(seq 1 20); do pgrep -f "$APP_BIN" >/dev/null || break; sleep 1; done
-  pgrep -f "$APP_BIN" >/dev/null && { say "GUI still up after 20s — TERM"; pkill -TERM -f "$APP_BIN" || true; }
+LOCK="$DATA/app-update.lock.d"
+mkdir "$LOCK" 2>/dev/null || { echo 'Another update/reload is running (or a stale lock needs repair)' >&2; exit 4; }
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+alive() { lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t >/dev/null 2>&1; }
+drain() {
+ local supervisor_pid
+ supervisor_pid=$(launchctl print "$JOB" 2>/dev/null | awk '$1 == "pid" && $2 == "=" {print $3; exit}' || true)
+ launchctl bootout "$JOB" 2>/dev/null || true
+ for _ in $(seq 1 20); do
+  if ! alive && { [ -z "$supervisor_pid" ] || ! kill -0 "$supervisor_pid" 2>/dev/null; }; then return 0; fi
+  sleep 1
+ done
+ echo "Port $PORT is still owned by a process; refusing to replace files or kill other hosts." >&2
+ return 1
+}
+boot() {
+ # Never accept an old process's published URL as the readiness signal.
+ rm -f "${DSH_WEB_URL_FILE:-$DATA/web-url.txt}"
+ launchctl bootstrap "gui/$(id -u)" "$PLIST" || return 1
+ for _ in $(seq 1 40); do
+  if node "$ROOT/ready.mjs"; then
+   DSH_APP_SUP="$DST/Contents/Resources/supervisor" node "$ROOT/verify-ptc.mjs" && return 0
+   return 1
+  fi
+  sleep 1
+ done
+ return 1
+}
+CANDIDATE=""
+OLD_APP=""
+if [ -f "$DATA/app-candidate.json" ]; then
+ CANDIDATE=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).path)' "$DATA/app-candidate.json")
+ [ -d "$CANDIDATE" ] || { echo 'Staged app is missing' >&2; exit 1; }
+ codesign --verify --deep --strict "$CANDIDATE"
+ READY_APP="$(dirname "$DST")/.dsh-ready-$$.app"
+ ditto "$CANDIDATE" "$READY_APP"
 fi
-
-# --- 2. drain the backend ---------------------------------------------------
-say "draining backend (launchd job com.zereraz.dsh-app)"
-launchctl bootout "$DOMAIN/com.zereraz.dsh-app" 2>/dev/null || true
-for _ in $(seq 1 15); do [ "$(http)" = 000 ] && break; sleep 1; done
-[ "$(http)" != 000 ] && { echo "port $PORT still answering after 15s — refusing to relaunch over a zombie" >&2; exit 1; }
-pgrep -f "$WEB_PATTERN" >/dev/null && pkill -TERM -f "$WEB_PATTERN" || true
-sleep 1
-
-# --- 3. relaunch ------------------------------------------------------------
-say "relaunching"
-launchctl bootstrap "$DOMAIN" "$HOME/Library/LaunchAgents/com.zereraz.dsh-app.plist" 2>/dev/null \
-  || launchctl kickstart "$DOMAIN/com.zereraz.dsh-app"
-for _ in $(seq 1 40); do alive && break; sleep 1; done
-
-# --- 4. verify or rollback --------------------------------------------------
-if ! alive; then
-  say "HEALTH FAIL after relaunch — swapping rollback back in"
-  [ -d "$ROLLBACK" ] || { echo "no rollback copy at $ROLLBACK — manual repair needed" >&2; exit 1; }
-  rm -rf "$DST"; ditto "$ROLLBACK" "$DST"
-  launchctl kickstart -k "$DOMAIN/com.zereraz.dsh-app"
-  for _ in $(seq 1 40); do alive && break; sleep 1; done
-  alive && { echo "ROLLED BACK and serving. Investigate before retrying." >&2; exit 1; }
-  echo "FATAL: rollback also failed health check. Manual repair." >&2; exit 1
+if [ "$FORCE" = 0 ] && [ -n "$(find "$DATA/sessions" -type f \( -name 'session.jsonl.zstd' -o -name 'session.jsonl' \) -mmin "-$IDLE")" ]; then
+ echo 'Chat activity resumed while preparing the reload; retry when idle.'; exit 3
 fi
-
-# pgrep no-match exits 1; with set -e a bare assignment of a failing $(...)
-# aborts the script AFTER a fully healthy relaunch (found by mock tracing
-# 2026-08-28). The PID is cosmetic data — never fatal.
-WEB_PID=$(pgrep -f "$WEB_PATTERN" | head -1 || true)
-say "up: port $PORT alive ($(http)), web pid $WEB_PID"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/verify-ptc.mjs" ]; then
-  node "$SCRIPT_DIR/verify-ptc.mjs" && say "PTC smoke: OK" || say "PTC smoke: WARN (see above) — old build still healthy enough to report"
+# Quitting only this bundle ID never targets a browser or another DSH server.
+osascript -e 'if application id "com.zereraz.dsh-native" is running then tell application id "com.zereraz.dsh-native" to quit' >/dev/null 2>&1 || true
+echo 'Draining primary backend…'
+drain || exit 1
+if [ -n "$CANDIDATE" ]; then
+ OLD_APP="$(dirname "$DST")/.dsh-previous-$$.app"
+ mv "$DST" "$OLD_APP"
+ if ! mv "$READY_APP" "$DST"; then mv "$OLD_APP" "$DST"; boot || true; exit 1; fi
 fi
-node "$SCRIPT_DIR"/stamp-update-state.mjs applied "$DST"
-say "done. Go ahead and use the app."
-# Re-open the GUI by itself — the cycle only guaranteed the backend; without
-# this the user hunted the app with Spotlight by hand (2026-08-28).
-open -g "$DST" 2>/dev/null || true
+if ! { node "$ROOT/plugins.mjs" rollback && node "$ROOT/plugins.mjs" activate; }; then
+ echo 'Plugin activation refused; restoring primary backend.' >&2
+ if [ -n "$OLD_APP" ]; then mv "$DST" "$READY_APP"; mv "$OLD_APP" "$DST"; fi
+ boot && open -g "$DST"
+ exit 1
+fi
+if boot; then
+ node "$ROOT/plugins.mjs" commit
+ if [ -n "$OLD_APP" ]; then
+  mkdir -p "$(dirname "$ROLLBACK")"
+  rm -rf "$ROLLBACK"; mv "$OLD_APP" "$ROLLBACK"
+  rm -f "$DATA/app-candidate.json"
+ fi
+ node "$ROOT/stamp-update-state.mjs" applied "$DST"
+ open -g "$DST"
+ echo 'Reload complete: authenticated boot and PTC passed. Test the plugin behavior in the app.'
+ exit 0
+fi
+echo 'Readiness failed. Draining before recovery…' >&2
+drain || exit 1
+if [ -f "$DATA/plugin-activation.json" ]; then
+ node "$ROOT/plugins.mjs" rollback
+fi
+if [ -n "$OLD_APP" ]; then
+ mv "$DST" "$(dirname "$DST")/.dsh-failed-$$.app"; mv "$OLD_APP" "$DST"
+elif [ -d "$ROLLBACK" ] && [ ! -f "$DATA/plugin-control.json" ]; then
+ # Copy recovery candidate before moving the failed bundle. Never delete the only copy.
+ RESTORE="$(dirname "$DST")/.dsh-restore-$$.app"
+ FAILED="$(dirname "$DST")/.dsh-failed-$$.app"
+ ditto "$ROLLBACK" "$RESTORE"
+ mv "$DST" "$FAILED"
+ if ! mv "$RESTORE" "$DST"; then mv "$FAILED" "$DST"; exit 1; fi
+ echo "Failed bundle retained at $FAILED"
+else
+ echo 'No rollback available; retrying the existing bundle.' >&2
+fi
+if boot; then
+ open -g "$DST"
+ echo 'Recovery boot passed. Requested reload failed; inspect the log before retrying.' >&2
+else
+ echo 'Recovery failed; primary backend needs repair. Other hosts were not signaled.' >&2
+fi
+exit 1

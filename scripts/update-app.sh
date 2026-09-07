@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # update-app.sh — the ONLY sanctioned way to update DeepSeek Harness.
 #
-# Pipeline: pull → build → sync runtime → HEALTH-GATE the candidate on a
-# throwaway port → only then swap the installed app. A failed gate leaves the
-# current app untouched. Every run snapshots ~/.dsh (git) and stages a
-# rollback copy of the working app.
+# Build/check a candidate and stage it. restart-app.sh drains before activation.
+# A failed gate leaves the installed app and other runtime copies untouched.
 set -euo pipefail
 # Portable cross-url lock: mkdir is atomic everywhere (flock binary is absent
 # from launchd's minimal PATH — a missing flock binary used to be indistinguishable
@@ -13,7 +11,13 @@ LOCKDIR="$HOME/.dsh/app-update.lock.d"
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
   echo "another update/apply runs (lock $LOCKDIR) — exiting" >&2; exit 4
 fi
-trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
+GATE_PID=""; GATE_HOME=""
+cleanup() {
+  if [ -n "$GATE_PID" ]; then kill "$GATE_PID" 2>/dev/null || true; wait "$GATE_PID" 2>/dev/null || true; fi
+  [ -z "$GATE_HOME" ] || rm -rf "$GATE_HOME"
+  rmdir "$LOCKDIR" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 # GUI-launched PATH (app menu / menubar extra) has no nvm — node/pnpm/git
 # would be invisible and the script would die mid-pipeline with a polite
@@ -32,7 +36,7 @@ DST="${DST:-/Applications/DeepSeek Harness.app}"
 ROLLBACK="${ROLLBACK:-$HOME/Applications/dsh-app-rollback.app}"
 GATE_PORT="${GATE_PORT:-41799}"
 # PATH only needs a node >= 22.19 on it; nothing user-specific is assumed.
-export PATH="/opt/homebrew/bin:$PATH" CI=true
+export PATH="${DSH_CONTROL_PATH:-/opt/homebrew/bin}:$PATH" CI=true
 
 say() { printf '\n[%s] %s\n' "$1" "$2"; }
 
@@ -41,7 +45,8 @@ git -C "$HOME/.dsh" add -A
 git -C "$HOME/.dsh" -c user.email=dsh-local@local -c user.name="dsh snapshot" commit -qm "pre-update $(date +%F-%H%M)" || true
 
 say 2/6 "git pull $HARNESS"
-git -C "$HARNESS" pull --rebase --autostash
+[ -z "$(git -C "$HARNESS" status --porcelain)" ] || { echo 'Harness checkout has local edits; commit or stash them before updating.' >&2; exit 1; }
+git -C "$HARNESS" pull --ff-only
 git -C "$HARNESS" log --oneline -1
 
 say 3/6 "build"
@@ -52,26 +57,29 @@ say 4/6 "sync runtime into app bundle"
 node "$APP_ROOT/scripts/sync-runtime.mjs" "$HARNESS" "$SUP"
 
 say 5/6 "HEALTH GATE: boot candidate on :$GATE_PORT in a throwaway home"
-GATE_LOG=/tmp/dsh-gate.log
-DSH_HOME=/tmp/dsh-gate-home node "$SUP/node_modules/@deepseek-ai/dsh/lib/bin.js" \
+GATE_HOME=$(mktemp -d /tmp/dsh-gate.XXXXXX)
+GATE_LOG="$GATE_HOME/boot.log"
+lsof -nP -iTCP:"$GATE_PORT" -sTCP:LISTEN -t >/dev/null 2>&1 && { echo "Gate port occupied" >&2; exit 1; }
+DSH_HOME="$GATE_HOME" node "$SUP/node_modules/@deepseek-ai/dsh/lib/bin.js" \
   web --host 127.0.0.1 --port "$GATE_PORT" --trusted-host "127.0.0.1:$GATE_PORT" --no-open >"$GATE_LOG" 2>&1 &
 GATE_PID=$!
-trap 'kill $GATE_PID 2>/dev/null || true' EXIT
+
 # dsh-local fix (alpha+): bare GET / is 401 on token-gated runtimes — resolve
 # the authoritative URL from the boot line and follow it through a cookie jar.
-jar=/tmp/dsh-gate-jar.txt
+jar="$GATE_HOME/cookies"
+page=""
 for i in $(seq 1 40); do
   sleep 1
   weburl=$(sed -n 's/^dsh web: \(http:\/\/[^ ]*\).*/\1/p' "$GATE_LOG" 2>/dev/null | head -1)
   if [ -n "$weburl" ]; then
     page="$(curl -sL -c "$jar" -b "$jar" -m 5 "$weburl" 2>/dev/null || true)"
-    [ -n "$page" ] && break
+    printf '%s' "$page" | grep -q '__DSH_BOOT__' && break
   fi
   page="$(curl -s -m 2 "http://127.0.0.1:$GATE_PORT/" 2>/dev/null || true)"
   printf '%s' "$page" | grep -q '__DSH_BOOT__' && break
 done
 bundle_ok=1
-curl -s -m 2 -o /dev/null "http://127.0.0.1:$GATE_PORT/plugins/@deepseek-ai/dsh-client-modules/client.js" || bundle_ok=0
+curl -fsS -b "$jar" -m 2 -o /dev/null "http://127.0.0.1:$GATE_PORT/plugins/@deepseek-ai/dsh-client-modules/client.js" || bundle_ok=0
 if ! printf '%s' "$page" | grep -q '__DSH_BOOT__'; then
   echo "GATE FAIL: no boot graph in served page — aborting, app untouched"; exit 1
 elif ! printf '%s' "$page" | grep -q '__ModuleLoader__='; then
@@ -88,21 +96,15 @@ if [ -d "$SUP/node_modules/@earendil-works/pi-ai" ] \
 fi
 [ -f "$APP_ROOT/zig-out/package/dsh-native.app/Contents/Resources/config/cordis.patch.yml" ] \
   || { echo "GATE FAIL: bundle missing Resources/config/cordis.patch.yml (supervisor crashes on boot) — aborting"; exit 1; }
-kill $GATE_PID 2>/dev/null || true
+kill "$GATE_PID" 2>/dev/null || true
+wait "$GATE_PID" 2>/dev/null || true
+GATE_PID=""
 echo "gate passed: boot graph + facade + bundles + pi-ai closure + config"
 
-say 6/6 "swap installed app"
-mkdir -p "$HOME/Applications"
-[ -d "$DST" ] && { rm -rf "$ROLLBACK"; cp -a "$DST" "$ROLLBACK"; }
-rm -rf "$DST"
-ditto "$APP_ROOT/zig-out/package/dsh-native.app" "$DST"
-codesign --force --deep --sign - "$DST" 2>/dev/null || true
-echo "installed. rollback copy: $ROLLBACK"
-node "$APP_ROOT/scripts/stamp-update-state.mjs" installed "$DST"
+say 6/6 "stage checked app for idle activation"
+node "$APP_ROOT/scripts/stage-app.mjs" "$APP_ROOT/zig-out/package/dsh-native.app"
 if [ "${1:-}" = "--restart" ] || [ "${RESTART:-0}" = "1" ]; then
-  say "graceful relaunch cycle"
-  bash "$APP_ROOT/scripts/restart-app.sh" ${FORCE:+--force}
-else
-  echo "QUIT and relaunch the app whenever ready — or rerun with:"
-  echo "  bash $APP_ROOT/scripts/restart-app.sh   (graceful: quits, drains, relaunches, health-gates)"
+  cleanup
+  trap - EXIT
+  exec bash "$APP_ROOT/scripts/restart-app.sh"
 fi

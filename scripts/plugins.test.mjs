@@ -1,0 +1,65 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+const tmp=await fs.mkdtemp(join(tmpdir(),'dsh-plugin-tests-'));
+process.env.DSH_HOME=join(tmp,'home'); process.env.DSH_PLUGIN_RELEASES=join(tmp,'releases');
+const api=await import('./plugins.mjs');
+const profile=join(process.env.DSH_HOME,'profiles/web');
+const source=join(tmp,'source');
+await fs.mkdir(join(source,'src'),{recursive:true}); await fs.mkdir(join(source,'node_modules'));
+await fs.mkdir(join(source,'lib')); await fs.writeFile(join(source,'lib/index.js'),'export const old = true;');
+await fs.writeFile(join(source,'src/index.js'),'export const fresh = true;');
+const pkg={name:'fixture',type:'module',main:'lib/index.js',scripts:{typecheck:'node --check src/index.js',test:'node --check src/index.js',build:'node build.cjs'}};
+await fs.writeFile(join(source,'package.json'),JSON.stringify(pkg));
+await fs.writeFile(join(source,'build.cjs'),"const fs=require('fs'); fs.mkdirSync('lib',{recursive:true}); fs.copyFileSync('src/index.js','lib/index.js');");
+await fs.mkdir(join(profile,'node_modules'),{recursive:true}); await fs.symlink(source,join(profile,'node_modules/fixture'));
+await fs.writeFile(join(profile,'package.json'),JSON.stringify({dependencies:{fixture:'link:'+source}}));
+test('build is isolated; activate/rollback/commit preserve linked source and staged state',async()=>{
+ await api.prepare('fixture');
+ assert.equal(await fs.readFile(join(source,'lib/index.js'),'utf8'),'export const old = true;');
+ assert.equal((await api.status())[0].staged,true);
+ await api.activate(); assert.notEqual(await fs.readlink(join(profile,'node_modules/fixture')),source);
+ await api.rollback(); assert.equal(await fs.readlink(join(profile,'node_modules/fixture')),source);
+ await api.activate(); await api.commit();
+ const row=(await api.status())[0]; assert.equal(row.source,source); assert.equal(row.staged,false);
+ assert.match(row.detail,/behavior unverified/);
+});
+test('failed build leaves active plugin untouched and source edits reject stale activation',async()=>{
+ const active=await fs.readlink(join(profile,'node_modules/fixture'));
+ await fs.writeFile(join(source,'src/index.js'),'not javascript !!!');
+ await assert.rejects(api.prepare('fixture'));
+ assert.equal(await fs.readlink(join(profile,'node_modules/fixture')),active);
+ await fs.writeFile(join(source,'src/index.js'),'export const next = true;');
+ await api.prepare('fixture');
+ await fs.appendFile(join(source,'src/index.js'),'\n// changed while waiting');
+ await assert.rejects(api.activate(),/source changed/);
+ assert.equal(await fs.readlink(join(profile,'node_modules/fixture')),active);
+});
+test('unknown plugins rejected',async()=>{await assert.rejects(api.prepare('../not-a-plugin'),/not a linked/);});
+test('upstream update is built privately without moving source HEAD',async()=>{
+ function git(dir,args) {const r=spawnSync('git',['-C',dir,...args],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();}
+ await fs.writeFile(join(source,'.gitignore'),'node_modules/\nlib/\n');
+ git(source,['init','-q']);git(source,['config','user.email','test@local']);git(source,['config','user.name','test']);git(source,['add','.']);git(source,['commit','-qm','fixture']);
+ const remote=join(tmp,'remote.git');git(source,['clone','--bare','--quiet',source,remote]);git(source,['remote','add','origin',remote]);git(source,['push','--quiet','-u','origin','HEAD']);
+ const branch=git(source,['symbolic-ref','--short','HEAD']);
+ const other=join(tmp,'other');git(source,['clone','--quiet',remote,other]);git(other,['config','user.email','test@local']);git(other,['config','user.name','test']);
+ await fs.writeFile(join(other,'src/index.js'),'export const upstream = true;');git(other,['add','.']);git(other,['commit','-qm','upstream']);git(other,['push','--quiet','origin',branch]);
+ const before=git(source,['rev-parse','HEAD']);
+ await api.prepare('fixture',true);
+ assert.equal(git(source,['rev-parse','HEAD']),before);
+ assert.equal((await api.status())[0].staged,true);
+});
+test('dependency copies preserve cycles without linking back to source',async()=>{
+ const src=join(tmp,'deps'); const dst=join(tmp,'copied-deps');
+ await fs.mkdir(join(src,'a'),{recursive:true}); await fs.mkdir(join(src,'b'));
+ await fs.writeFile(join(src,'a/code.js'),'test');
+ await fs.symlink(join(src,'b'),join(src,'a/b'));await fs.symlink(join(src,'a'),join(src,'b/a'));
+ await api.copyDependencies(src,dst);
+ const target=await fs.realpath(join(dst,'a/b/a'));
+ assert.equal(target,await fs.realpath(join(dst,'a')));
+ assert.equal(await fs.readFile(join(dst,'a/code.js'),'utf8'),'test');
+});
+test.after(async()=>fs.rm(tmp,{recursive:true,force:true}));
