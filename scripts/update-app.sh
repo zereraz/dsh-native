@@ -78,8 +78,18 @@ for i in $(seq 1 40); do
   page="$(curl -s -m 2 "http://127.0.0.1:$GATE_PORT/" 2>/dev/null || true)"
   printf '%s' "$page" | grep -q '__DSH_BOOT__' && break
 done
+# dsh-local (0.1.3): plugin bundles are served ONLY as combined, rev-pinned
+# `/plugins/??<modules>&rev=<hash>` URLs advertised inside the boot graph —
+# the pre-0.1.3 per-module path `/plugins/<pkg>/client.js` no longer exists.
+# Extract the exact URL the boot graph itself advertises for the module and
+# fetch THAT, so the probe can never go stale again.
 bundle_ok=1
-curl -fsS -b "$jar" -m 2 -o /dev/null "http://127.0.0.1:$GATE_PORT/plugins/@deepseek-ai/dsh-client-modules/client.js" || bundle_ok=0
+bundle_url="$(printf '%s' "$page" | grep -o 'plugins/[^"'"'"' ]*dsh-client-modules/client\.js[^"'"'"']*' | head -1 | sed 's/&amp;/\&/g')"
+if [ -n "$bundle_url" ]; then
+  curl -fsS -b "$jar" -m 5 -o /dev/null "http://127.0.0.1:$GATE_PORT/$bundle_url" || bundle_ok=0
+else
+  bundle_ok=0
+fi
 if ! printf '%s' "$page" | grep -q '__DSH_BOOT__'; then
   echo "GATE FAIL: no boot graph in served page — aborting, app untouched"; exit 1
 elif ! printf '%s' "$page" | grep -q '__ModuleLoader__='; then
