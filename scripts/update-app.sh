@@ -104,12 +104,32 @@ if [ -d "$SUP/node_modules/@earendil-works/pi-ai" ] \
   && ! node --input-type=module -e "await import('$SUP/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js')" 2>/dev/null; then
   echo "GATE FAIL: pi-ai openai-completions not importable (dependency closure broken) — aborting, app untouched"; exit 1
 fi
+# dsh-local 2026-09-09 (incident 01a06e17): prove the resume-critical flock
+# addon actually loads its platform binary from THIS artifact. flock.js is
+# deliberately lazy — importing it proves nothing — so acquire a real lock
+# on a gate-home file. This is the exact path that broke when sync-runtime
+# dropped the bin-only -darwin-arm64 sibling: boot stayed green, user
+# session resumes crashed. stage-app.mjs asserts the closure statically;
+# this exercises it for real.
+if [ -d "$SUP/node_modules/@deepseek-ai/node-addon-system" ]; then
+  if ! node --input-type=module -e "
+    const { open } = await import('node:fs/promises');
+    const { tryLockExclusive } = await import('$SUP/node_modules/@deepseek-ai/node-addon-system/lib/flock.js');
+    const fh = await open('$GATE_HOME/flock-smoke', 'w');
+    await tryLockExclusive(fh.fd);
+    await fh.close();
+  " 2>"$GATE_HOME/flock-smoke.err"; then
+    echo "GATE FAIL: flock platform addon unloadable (session resume would crash) — aborting, app untouched"
+    sed -n '1,3p' "$GATE_HOME/flock-smoke.err" >&2
+    exit 1
+  fi
+fi
 [ -f "$APP_ROOT/zig-out/package/dsh-native.app/Contents/Resources/config/cordis.patch.yml" ] \
   || { echo "GATE FAIL: bundle missing Resources/config/cordis.patch.yml (supervisor crashes on boot) — aborting"; exit 1; }
 kill "$GATE_PID" 2>/dev/null || true
 wait "$GATE_PID" 2>/dev/null || true
 GATE_PID=""
-echo "gate passed: boot graph + facade + bundles + pi-ai closure + config"
+echo "gate passed: boot graph + facade + bundles + pi-ai + flock + config"
 
 say 6/6 "stage checked app for idle activation"
 node "$APP_ROOT/scripts/stage-app.mjs" "$APP_ROOT/zig-out/package/dsh-native.app"
