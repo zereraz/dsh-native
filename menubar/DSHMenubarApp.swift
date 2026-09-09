@@ -190,6 +190,8 @@ final class MenubarModel: ObservableObject {
 
     func applyUpdateTapped() { applyUpdate(force: false) }
 
+    func applyUpdateNowTapped() { applyUpdate(force: true) }
+
     func refreshPlugins() {
         guard !pluginPollRunning && !busy else { return }
         pluginPollRunning = true
@@ -341,6 +343,13 @@ struct MenuContent: View {
                 Button("Reload Backend") { model.applyUpdateTapped() }.disabled(model.busy)
             }
             Text("Reload waits for recent chat activity to stop.").font(.caption2).foregroundStyle(.secondary)
+            if model.stagedAppVersion != nil {
+                HStack {
+                    Spacer()
+                    Button("Reload Backend Now — v\(model.stagedAppVersion ?? "")") { model.applyUpdateNowTapped() }.disabled(model.busy)
+                }
+                Text("Skips the idle wait: any in-flight chat turn is cut immediately.").font(.caption2).foregroundStyle(.secondary)
+            }
             Divider()
             Text("Plugins").font(.headline)
             if !model.pluginMessage.isEmpty { Text(model.pluginMessage).font(.caption) }
