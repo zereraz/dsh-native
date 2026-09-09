@@ -40,7 +40,13 @@ for (const group of ['packages', 'vendor', 'native/system/packages']) {
           // Install every built @deepseek-ai package — filtering by prior
           // presence silently drops NEW packages the release added (e.g. the
           // ui-renderer → infinite 'Loading plugins…').
-          if (pkg.name?.startsWith('@deepseek-ai/') && existsSync(join(p, 'lib'))) put(p, join(target, basename(pkg.name)))
+          // dsh-local fix 2026-09-09: platform addon packages
+          // (@deepseek-ai/node-addon-system-<os>-<arch>) ship bin/<addon>.node
+          // and NO lib/ — the lib-only gate dropped them, and flock.js then
+          // crashed session resume with 'Cannot find module
+          // @deepseek-ai/node-addon-system-darwin-arm64/package.json'.
+          // Accept either artifact dir: lib/ (built JS) or bin/ (prebuilt N-API).
+          if (pkg.name?.startsWith('@deepseek-ai/') && (existsSync(join(p, 'lib')) || existsSync(join(p, 'bin')))) put(p, join(target, basename(pkg.name)))
         } catch { /* unparseable manifests are not runtime */ }
       }
       walk(p)
