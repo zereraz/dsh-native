@@ -24,7 +24,12 @@ const put = (srcDir, dstDir) => {
 }
 
 put(join(harness, 'apps/cli'), join(target, 'dsh'))
-for (const group of ['packages', 'vendor']) {
+// dsh-local fix 2026-09-09: 0.1.5 moved the Landlock + flock addons under
+// native/system/packages/@deepseek-ai/node-addon-system*; that tree sits
+// outside packages+vendor, so releases would ship a bundle whose new
+// session-persistence and sandbox plugin entries crash at boot with
+// "Cannot find package '@deepseek-ai/node-addon-system'".
+for (const group of ['packages', 'vendor', 'native/system/packages']) {
   const walk = (dir) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name)
