@@ -339,43 +339,51 @@ struct MenuContent: View {
             Divider()
             HStack {
                 Button("Open") { model.openApp() }
-                Button("Check & Update…") { model.checkUpdate() }.disabled(model.busy)
-                Button("Reload Backend") { model.applyUpdateTapped() }.disabled(model.busy)
-            }
-            Text("Reload waits for recent chat activity to stop.").font(.caption2).foregroundStyle(.secondary)
-            if model.stagedAppVersion != nil {
-                HStack {
-                    Spacer()
-                    Button("Reload Backend Now — v\(model.stagedAppVersion ?? "")") { model.applyUpdateNowTapped() }.disabled(model.busy)
+                Button("Update") { model.checkUpdate() }.disabled(model.busy)
+                Button(model.stagedAppVersion != nil ? "Activate v\(model.stagedAppVersion ?? "")" : "Reload Backend") { model.applyUpdateTapped() }.disabled(model.busy)
+                if model.stagedAppVersion != nil && model.activeSessions > 0 {
+                    Button("Now") { model.applyUpdateNowTapped() }.disabled(model.busy)
                 }
-                Text("Skips the idle wait: any in-flight chat turn is cut immediately.").font(.caption2).foregroundStyle(.secondary)
             }
+            Text(reloadCaption).font(.caption2).foregroundStyle(.secondary)
             Divider()
-            Text("Plugins").font(.headline)
-            if !model.pluginMessage.isEmpty { Text(model.pluginMessage).font(.caption) }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(model.plugins) { plugin in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("\(plugin.name) · source \(plugin.revision)").font(.subheadline)
-                            Text(plugin.detail).font(.caption2).foregroundStyle(.secondary)
-                            HStack {
-                                Button("Build & Check") { model.preparePlugin(plugin, update: false) }.disabled(model.busy || !plugin.canBuild)
-                                Button("Update & Check") { model.preparePlugin(plugin, update: true) }.disabled(model.busy || !plugin.canBuild)
-                                Button("Log") { model.pluginLog(plugin) }.disabled(!model.hasPluginLog(plugin))
+            DisclosureGroup("Plugins (\(model.plugins.count))") {
+                if !model.pluginMessage.isEmpty { Text(model.pluginMessage).font(.caption) }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(model.plugins) { plugin in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(plugin.name) · source \(plugin.revision)").font(.subheadline)
+                                Text(plugin.detail).font(.caption2).foregroundStyle(.secondary)
+                                HStack {
+                                    Button("Update & Check") { model.preparePlugin(plugin, update: true) }.disabled(model.busy || !plugin.canBuild)
+                                    Button("Log") { model.pluginLog(plugin) }.disabled(!model.hasPluginLog(plugin))
+                                }
                             }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: 230, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, maxHeight: 230, alignment: .leading)
-            Button(model.currentLog == nil || model.currentLog?.lastPathComponent == "discovery.log" ? "Discovery Log" : "Latest Run Log") { model.openLog() }
-            Toggle("Auto-apply when idle", isOn: $model.autoApply)
+            .font(.subheadline)
+            Divider()
+            DisclosureGroup("Advanced") {
+                Toggle("Auto-apply when idle", isOn: $model.autoApply)
+                Button(model.currentLog == nil || model.currentLog?.lastPathComponent == "discovery.log" ? "Discovery Log" : "Latest Run Log") { model.openLog() }
+            }
+            .font(.subheadline)
         }
         .padding(12)
-        .frame(width: 430)
+        .frame(width: 380)
         .onAppear { model.start() }
+    }
+
+    private var reloadCaption: String {
+        if model.stagedAppVersion == nil { return "Reload restarts the backend as-is." }
+        return model.activeSessions > 0
+            ? "Activate waits for chat to go quiet — Now cuts immediately."
+            : "Backend is idle — activates immediately."
     }
 }
 
