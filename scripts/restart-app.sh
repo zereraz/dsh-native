@@ -66,6 +66,15 @@ fi
 if [ "$FORCE" = 0 ] && [ -n "$(find "$DATA/sessions" -type f \( -name 'session.jsonl.zstd' -o -name 'session.jsonl' \) -mmin "-$IDLE")" ]; then
  echo 'Chat activity resumed while preparing the reload; retry when idle.'; exit 3
 fi
+# dsh-local 2026-09-14 (chat-notes incident): preflight the REAL profile in a
+# sandbox before killing anything. Hand-linked plugins bypass the
+# transactional install flow; the restart is the only chokepoint every
+# profile change funnels through, so a profile that cannot boot must be
+# stopped HERE — before the running backend is touched. (~30s cost.)
+if ! bash "$ROOT/profile-preflight.sh"; then
+ echo 'PROFILE PREFLIGHT FAILED — aborting before any change. Running app untouched.' >&2
+ exit 5
+fi
 # Quitting only this bundle ID never targets a browser or another DSH server.
 osascript -e 'if application id "com.zereraz.dsh-native" is running then tell application id "com.zereraz.dsh-native" to quit' >/dev/null 2>&1 || true
 echo 'Draining primary backend…'
