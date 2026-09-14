@@ -62,6 +62,22 @@ offenders — do not remove them.
    empirical rebuttal.)*
 6. **Fail loud, never silent-skip.** Every `catch`/`|| true` that swallows
    an error must print what it swallowed and why that is safe.
+7. **Gate the chokepoint, not the origin.** Plugins arrive three different
+   ways (transactional release, hand-linked misc/*, manual profile edits),
+   and all of them funnel through exactly one place — a backend restart.
+   A per-path gate misses whichever path you didn't think of; a chokepoint
+   gate catches all of them. *(Incident: hand-linked dsh-chat-notes
+   registered a duplicate route — 1,611 failed boots, and no gate ever
+   saw it because no gate lived on the restart.)*
+8. **A crash loop looks alive.** launchd KeepAlive respawns blindly
+   forever; a backend dying every few seconds still serves the login page
+   often enough that the GUI spins instead of showing "down." Detection
+   of pathological process behavior must live outside the process —
+   that is the sentinel's job, not the app's.
+9. **A raised ceiling is a mitigation, not a fix.** `--max-old-space-size`
+   moved the GC death-spiral wall from 4 GB to 16 GB; the creep itself
+   stayed unexplained until measured. Before accepting any "raise the
+   limit" fix, start the measurement that would have justified it.
 
 **Mechanical gates (do not remove):**
 - `stage-app.mjs` — dependency-closure assertion: every `@deepseek-ai`
@@ -71,6 +87,15 @@ offenders — do not remove them.
 - `update-app.sh` gate — flock smoke: acquires a real file lock through
   the artifact's `node-addon-system` platform binary. Catches missing
   bin-only packages that boot-fresh gates cannot see.
+- `restart-app.sh` — profile preflight (`profile-preflight.sh`): the REAL
+  profile must sandbox-boot clean before the running backend is touched.
+  Abort exit 5 leaves the live app untouched. Catches boot-breaking
+  profile/plugin changes regardless of how they got there.
+- `~/.dsh/scripts/dsh-sentinel.sh` (LaunchAgent `com.zereraz.dsh-sentinel`)
+  — heap-creep watchdog (warn 8 GB → idle-gated graceful restart, critical
+  12 GB → force), crash-loop churn detection (≥6 pids/10 min → loud
+  notification with the last loader error), fresh-boot loader-rot
+  surfacing. Logs to `~/.dsh/logs/mem-watch.log`.
 
 ## Roadmap
 
