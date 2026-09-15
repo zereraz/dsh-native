@@ -129,7 +129,12 @@ function alignDep(name, fromDir) {
     try { dstVer = JSON.parse(readFileSync(join(dst, 'package.json'), 'utf8')).version } catch {}
     const range = JSON.parse(readFileSync(join(fromDir, 'package.json'), 'utf8')).dependencies?.[name] ?? '*'
     if (dstVer === null || !satisfies(dstVer, range)) {
-      cpSync(root, dst, { recursive: true })
+      // dsh-local 2026-09-15 (0.1.6 staging failure): lookupPkgDir can return a
+      // pnpm SYMLINK path (existsSync follows links); cpSync with the default
+      // dereference:false then preserves the link into the app bundle, and
+      // ad-hoc codesign --deep --strict refuses to seal it ('code has no
+      // resources…'). Materialize real content instead.
+      cpSync(root, dst, { recursive: true, dereference: true })
       console.log(`  aligned ${name} ${dstVer ?? '—'} → ${srcPkg.version}`)
     }
     for (const dep of Object.keys(srcPkg.dependencies ?? {}))
