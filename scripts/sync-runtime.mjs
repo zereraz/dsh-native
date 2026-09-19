@@ -110,6 +110,28 @@ function lookupPkgDir(name, fromDir) {
     if (parent === dir) return null
   }
 }
+// dsh-local 2026-09-20 (4-day tree-death): 'open' is a declared dep of
+// dsh-web-app but pnpm keeps it ONLY in the store — not hoisted to any
+// node_modules the ancestor walk or require.resolve can reach from the
+// dependent's directory. alignDep then logged "unresolvable … gate decides",
+// nothing aligned it, and the staged app died on `import 'open'`. Resolve
+// straight out of .pnpm: scoped "@scope/pkg" lives at
+// .pnpm/@scope+pkg@<version>/node_modules/@scope/pkg — newest version wins.
+function lookupPnpmStore(name) {
+  const storeDir = join(harness, 'node_modules', '.pnpm')
+  if (!existsSync(storeDir)) return null
+  const prefix = name.replace('/', '+') + '@'
+  let best = null, bestVer = ''
+  for (const entry of readdirSync(storeDir)) {
+    if (!entry.startsWith(prefix)) continue
+    const candidate = join(storeDir, entry, 'node_modules', ...name.split('/'))
+    if (!existsSync(join(candidate, 'package.json'))) continue
+    let ver = ''
+    try { ver = JSON.parse(readFileSync(join(candidate, 'package.json'), 'utf8')).version ?? '' } catch {}
+    if (ver > bestVer) { bestVer = ver; best = candidate }
+  }
+  return best
+}
 function alignDep(name, fromDir) {
   if (done.has(name)) return
   done.add(name)
@@ -121,7 +143,8 @@ function alignDep(name, fromDir) {
       let p = null
       try { p = req.resolve(name) } catch { root = lookupPkgDir(name, fromDir) }
       if (!root && p) { while (!existsSync(join(p, 'package.json'))) p = dirname(p); root = p }
-      if (!root) throw new Error(`${name} unresolvable by require or on disk`) 
+      if (!root) root = lookupPnpmStore(name)
+      if (!root) throw new Error(`${name} unresolvable by require, on disk, or in pnpm store`) 
     }
     const srcPkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
     const dst = join(supMods, ...name.split('/'))
