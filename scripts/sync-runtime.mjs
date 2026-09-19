@@ -160,8 +160,14 @@ function alignDep(name, fromDir) {
       cpSync(root, dst, { recursive: true, dereference: true })
       console.log(`  aligned ${name} ${dstVer ?? '—'} → ${srcPkg.version}`)
     }
+    // dsh-local 2026-09-20 (alpha.2 staging): recurse into ALL dependencies,
+    // including @deepseek-ai/* ones. Built packages were already installed by
+    // the walk (put()) and alignDep's version check skips satisfied ranges, so
+    // this only fires for store-only @deepseek-ai packages the walk can never
+    // see — e.g. libreoffice-kit (prebuilt external dep of the new
+    // dsh-office-to-pdf), which lives only in .pnpm and broke the closure.
     for (const dep of Object.keys(srcPkg.dependencies ?? {}))
-      if (!dep.startsWith('@deepseek-ai/')) alignDep(dep, root)
+      alignDep(dep, root)
   } catch (e) { console.log(`  note: ${name} unresolvable from repo (${e?.code ?? e?.message} — optional or bundled; gate decides)`) }
 }
 for (const [n, d] of depSources) alignDep(n, d)
@@ -211,6 +217,40 @@ function graftPnpmSiblings(pkgName) {
   }
 }
 graftPnpmSiblings('@earendil-works/pi-ai')
+// dsh-local 2026-09-20 (alpha.2 closure hole): the WALK installs built
+// @deepseek-ai packages but never walks THEIR dependencies, and alignDep's
+// graph starts from depSources only — so a dep reachable solely through a
+// walk-installed package (dsh-office-to-pdf → @deepseek-ai/libreoffice-kit,
+// store-only, no source dir to walk) never gets aligned, and the closure
+// assertion kills staging. Close the graph: sweep every installed package's
+// declared deps and align anything absent. Built copies stay authoritative
+// (alignDep skips satisfied ranges); the pnpm-store fallback covers
+// store-only packages. Fixpoint loop: newly aligned packages get swept too.
+{
+  const swept = new Set()
+  for (let pass = 0; pass < 10; pass++) {
+    const installed = []
+    try { for (const s of readdirSync(join(supMods, '@deepseek-ai'))) installed.push('@deepseek-ai/' + s) } catch {}
+    try { for (const d of readdirSync(supMods)) if (d !== '@deepseek-ai' && !d.startsWith('.')) installed.push(d) } catch {}
+    let newly = 0
+    for (const name of installed) {
+      if (swept.has(name)) continue
+      swept.add(name)
+      newly++
+      const dir = join(supMods, ...name.split('/'))
+      let deps = {}
+      try {
+        const pj = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+        // optionalDependencies matter too: platform subpackages (libreoffice-
+        // kit-darwin-arm64, -wasm) are declared optional, and the closure
+        // assertion requires the platform-matching ones.
+        deps = { ...pj.dependencies, ...pj.optionalDependencies }
+      } catch { continue }
+      for (const dep of Object.keys(deps)) alignDep(dep, dir)
+    }
+    if (!newly) break
+  }
+}
 // koffi native sibling package: version must pair exactly
 const koffiDir = join(supMods, 'koffi')
 if (existsSync(koffiDir)) {
