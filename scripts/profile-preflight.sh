@@ -45,10 +45,24 @@ PROBE_PID=$!
 
 for _ in $(seq 1 40); do
   if grep -aq "dsh web: http" "$SB/boot.log" 2>/dev/null; then
-    # Composition succeeded. Loader-entry failures are NOT fatal to boot but
-    # are silent rot — report them without failing the restart.
+    # dsh-local 2026-09-20 (4-day silent tree-death): the boot line appears
+    # even when the PLUGIN TREE is dead — "boots" is not "works". A tree
+    # failure kills every plugin (glass, chat-notes, …) while the server
+    # still serves. That must FAIL the gate, not pass it.
+    if grep -aq "plugin tree failed to load" "$SB/boot.log" 2>/dev/null; then
+      echo "PREFLIGHT FAIL: plugin tree failed to load — boot line is NOT health:" >&2
+      grep -aE "failed to apply loader entry|duplicate|Cannot find" "$SB/boot.log" | head -5 >&2
+      exit 1
+    fi
+    # Individual loader-entry failures leave the tree degraded but alive —
+    # report loudly; on this hand-linked profile any entry failure means a
+    # plugin we ship is broken.
     ROT=$(grep -ac "failed to apply loader entry" "$SB/boot.log" || true)
-    [ "${ROT:-0}" -gt 0 ] && echo "preflight note: $ROT loader-entry failure(s) in this profile (non-fatal; check plugin rows)"
+    if [ "${ROT:-0}" -gt 0 ]; then
+      echo "PREFLIGHT FAIL: $ROT loader-entry failure(s) — a shipped plugin is broken:" >&2
+      grep -a "failed to apply loader entry" "$SB/boot.log" | head -3 >&2
+      exit 1
+    fi
     echo "preflight passed: profile boots clean on :$PORT"
     exit 0
   fi

@@ -126,6 +126,20 @@ if [ -d "$SUP/node_modules/@deepseek-ai/node-addon-system" ]; then
 fi
 [ -f "$APP_ROOT/zig-out/package/dsh-native.app/Contents/Resources/config/cordis.patch.yml" ] \
   || { echo "GATE FAIL: bundle missing Resources/config/cordis.patch.yml (supervisor crashes on boot) — aborting"; exit 1; }
+# dsh-local 2026-09-20 (4-day silent tree-death): the boot line and the
+# served page appear even when the plugin TREE is dead — a missing 'open'
+# package killed every plugin at activation while this gate stayed green,
+# because "boots and serves" is not "plugins alive". Tree failure is fatal.
+if grep -aq "plugin tree failed to load" "$GATE_LOG" 2>/dev/null; then
+  echo "GATE FAIL: plugin tree failed to load in gate-home boot — aborting, app untouched" >&2
+  grep -aE "failed to apply loader entry|duplicate prefix|Cannot find package" "$GATE_LOG" | head -5 >&2
+  exit 1
+fi
+if [ "$(grep -ac 'failed to apply loader entry' "$GATE_LOG" 2>/dev/null || true)" -gt 0 ]; then
+  echo "GATE FAIL: loader-entry failures in gate-home boot (a shipped plugin is broken) — aborting, app untouched" >&2
+  grep -a "failed to apply loader entry" "$GATE_LOG" | head -3 >&2
+  exit 1
+fi
 kill "$GATE_PID" 2>/dev/null || true
 wait "$GATE_PID" 2>/dev/null || true
 GATE_PID=""
