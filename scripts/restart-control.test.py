@@ -6,9 +6,13 @@ class RestartTests(unittest.TestCase):
   with tempfile.TemporaryDirectory(prefix='dsh-restart-test-') as t:
    t=pathlib.Path(t); home=t/'home'; bin=t/'bin'; bin.mkdir()
    (home/'.dsh/sessions/x').mkdir(parents=True); (home/'Library/LaunchAgents').mkdir(parents=True)
+   # profile-preflight (2026-09-14) sandbox-boots the real profile before
+   # anything is touched; give it an (empty) profile and a fake boot line.
+   (home/'.dsh/profiles/web').mkdir(parents=True)
    (home/'Library/LaunchAgents/com.zereraz.dsh-app.plist').write_text('fixture')
    dst=t/'installed.app'; rollback=t/'rollback.app'; candidate=t/'candidate.app'
    for p,v in [(dst,'old'),(rollback,'rollback'),(candidate,'new')]: p.mkdir(); (p/'version').write_text(v)
+   (dst/'Contents/Resources/supervisor').mkdir(parents=True)  # preflight precondition
    if staged:
     import json
     (home/'.dsh/app-candidate.json').write_text(json.dumps({'path':str(candidate)}))
@@ -22,6 +26,7 @@ case "$1" in bootout) rm -f "$TEST_ROOT/up";; bootstrap) touch "$TEST_ROOT/up"; 
     'ditto':'echo copy >> "$TEST_ROOT/events"; /bin/cp -R "$1" "$2"',
     'mv':'echo "move $*" >> "$TEST_ROOT/events"; /bin/mv "$@"',
     'node': '''case "$1" in
+ *dsh/lib/bin.js) echo 'dsh web: http://127.0.0.1:41813/?token=fixture'; exec /bin/sleep 20;;
  *ready.mjs) n=$(cat "$TEST_ROOT/boots"); [ "$MODE" = happy ] || [ "$MODE" = ptc-fail ] || [ "$n" -ge 2 ];;
  *verify-ptc.mjs) n=$(cat "$TEST_ROOT/boots"); [ "$MODE" != ptc-fail ] || [ "$n" -ge 2 ];;
  *plugins.mjs) echo "plugin $2" >> "$TEST_ROOT/events";;
