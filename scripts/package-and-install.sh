@@ -55,10 +55,15 @@ node "$ROOT/scripts/sync-runtime.mjs" "$HARNESS" "$ARTIFACT/Contents/Resources/s
 # copyfile) without this step.
 rm -rf "$ARTIFACT/Contents/Resources/config"
 cp -R "$ROOT/config" "$ARTIFACT/Contents/Resources/config"
-if ! grep -q ensureSpawnableCwd "$ARTIFACT/Contents/Resources/supervisor/node_modules/@deepseek-ai/dsh-code-runtime-worker-thread/lib/index.js"; then
-  echo "REFUSING install: harness-repo runtime missing from artifact (uv_cwd fix absent)" >&2
-  exit 1
-fi
+# dsh-local 2026-09-21 (strict review): the old marker grep'd
+# ensureSpawnableCwd inside dsh-code-runtime-worker-thread — a package
+# DELETED upstream in 0.1.6. The grep on a missing file exits 2, so this
+# guard had become a permanent refusal: every install on 0.1.6+ artifacts
+# failed with 'uv_cwd fix absent'. The incident class (spawn from a
+# deleted cwd) is now gated by verify-ptc.mjs's subprocess check at
+# activation; here we assert the modern runtime surface simply EXISTS.
+[ -f "$ARTIFACT_SUP/node_modules/@deepseek-ai/dsh-subprocess-local/lib/index.js" ] \
+  || { echo "REFUSING install: subprocess runtime missing from artifact (ptc-runtime family incomplete)" >&2; exit 1; }
 
 # --- GATE: prove the candidate serves BEFORE touching /Applications --------
 # A broken bundle must never get swapped in and launched again: three cheap
@@ -100,6 +105,19 @@ done
 kill "$GATE_PID" 2>/dev/null || true
 printf '%s' "$page" | grep -q '__DSH_BOOT__'     || { echo "GATE FAIL: no boot graph (log: $GATE_HOME/boot.log)" >&2; exit 1; }
 printf '%s' "$page" | grep -q '__ModuleLoader__=' || { echo "GATE FAIL: facade script missing (would boot to 'Failed to load plugins')" >&2; exit 1; }
+# dsh-local 2026-09-21 (strict review): boot line and facade are NOT tree
+# health — the Sep-16 class (every plugin dead, page still serves) would
+# pass this gate. Same check as update-app.sh: tree failure in the gate
+# boot log blocks the install.
+if grep -aq "plugin tree failed to load" "$GATE_HOME/boot.log" 2>/dev/null; then
+  echo "GATE FAIL: plugin tree failed to load in gate boot — refusing install" >&2
+  grep -aE "failed to apply loader entry|duplicate prefix|Cannot find package" "$GATE_HOME/boot.log" | head -3 >&2
+  exit 1
+fi
+if [ "$(grep -ac 'failed to apply loader entry' "$GATE_HOME/boot.log" 2>/dev/null || true)" -gt 0 ]; then
+  echo "GATE FAIL: loader-entry failures in gate boot (a shipped plugin is broken) — refusing install" >&2
+  exit 1
+fi
 rm -rf "$GATE_HOME"
 echo "gate passed: config present + pi-ai closure importable + boot graph + facade"
 
