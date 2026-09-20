@@ -24,6 +24,14 @@ const stateFile = process.env.DSH_STATE_FILE || join(homedir(), '.dsh', 'update-
 const version = execFileSync('/usr/libexec/PlistBuddy',
   ['-c', 'Print :CFBundleShortVersionString', join(app, 'Contents', 'Info.plist')],
   { encoding: 'utf8' }).trim()
+// The shell version never moves between harness pulls — the harness version
+// is what actually changed. Record it so the menubar can show both instead
+// of a frozen "v0.4.0" for every update (2026-09-20 review finding).
+let harnessVersion
+try {
+  harnessVersion = JSON.parse(readFileSync(
+    join(app, 'Contents/Resources/supervisor/node_modules/@deepseek-ai/dsh/package.json'), 'utf8')).version
+} catch { /* bundles without a harness supervisor keep the old shape */ }
 const d = new Date()
 const pad = n => String(n).padStart(2, '0')
 const tz = -d.getTimezoneOffset()
@@ -34,6 +42,7 @@ let old = {}
 try { old = JSON.parse(readFileSync(stateFile, 'utf8')) } catch { /* fresh */ }
 const next = {
   version,
+  ...(harnessVersion ? { harnessVersion } : {}),
   // an install IS a new install — always refresh installedAt;
   // only the 'applied' stamp keeps it (and stamps appliedAt=now)
   installedAt: action === 'applied' ? old.installedAt : now,

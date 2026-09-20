@@ -16,6 +16,7 @@ import SwiftUI
 
 struct UpdateState: Codable {
     var version: String?
+    var harnessVersion: String?
     var installedAt: Date?
     var appliedAt: Date?
     var lastAction: String?
@@ -52,6 +53,7 @@ let isoDate: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-
 final class MenubarModel: ObservableObject {
     @Published var state = UpdateState()
     @Published var stagedAppVersion: String?
+    @Published var stagedAppHarnessVersion: String?
     @Published var health: HostHealth = .checking
     @Published var lastLine = ""
     @Published var activeSessions = 0
@@ -113,14 +115,19 @@ final class MenubarModel: ObservableObject {
         case .up: return needsApply ? "arrow.triangle.2.circlepath.circle.fill" : "checkmark.circle.fill"
         }
     }
+    // The shell bundle version never moves between harness pulls; the
+    // harness version is what actually changed. Label both when known.
+    func vLabel(_ v: String, _ h: String?) -> String {
+        h.map { "v\(v) · harness \($0)" } ?? "v\(v)"
+    }
     var statusText: String {
         if pluginRunning { return "Checking plugin…" }
         if updateRunning { return "Building and checking update…" }
         if applyRunning { return "Restarting DeepSeek Harness…" }
-        if let version = stagedAppVersion { return "v\(version) staged — reload to activate" }
+        if let version = stagedAppVersion { return vLabel(version, stagedAppHarnessVersion) + " staged — reload to activate" }
         if health == .down { return "DeepSeek Harness host is down" }
-        if needsApply, let v = state.version { return "v\(v) installed — restart to apply" }
-        if let v = state.version { return "v\(v) applied" }
+        if needsApply, let v = state.version { return vLabel(v, state.harnessVersion) + " installed — restart to apply" }
+        if let v = state.version { return vLabel(v, state.harnessVersion) + " applied" }
         return "Host up (no update state)"
     }
 
@@ -140,7 +147,8 @@ final class MenubarModel: ObservableObject {
         if let data = try? Data(contentsOf: candidateURL),
            let candidate = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
             stagedAppVersion = candidate["version"]; stagedAppPath = candidate["path"]
-        } else { stagedAppVersion = nil; stagedAppPath = nil }
+            stagedAppHarnessVersion = candidate["harnessVersion"]
+        } else { stagedAppVersion = nil; stagedAppPath = nil; stagedAppHarnessVersion = nil }
         state = readState() ?? UpdateState()
         activeSessions = countActiveSessions(minutes: 10)
         // file flag wins (the app menu writes the file, not UserDefaults)
@@ -340,7 +348,7 @@ struct MenuContent: View {
             HStack {
                 Button("Open") { model.openApp() }
                 Button("Update") { model.checkUpdate() }.disabled(model.busy)
-                Button(model.stagedAppVersion != nil ? "Activate v\(model.stagedAppVersion ?? "")" : "Reload Backend") { model.applyUpdateTapped() }.disabled(model.busy)
+                Button(model.stagedAppVersion != nil ? "Activate \(model.vLabel(model.stagedAppVersion ?? "", model.stagedAppHarnessVersion))" : "Reload Backend") { model.applyUpdateTapped() }.disabled(model.busy)
                 if model.stagedAppVersion != nil && model.activeSessions > 0 {
                     Button("Now") { model.applyUpdateNowTapped() }.disabled(model.busy)
                 }

@@ -84,7 +84,12 @@ done
 # Extract the exact URL the boot graph itself advertises for the module and
 # fetch THAT, so the probe can never go stale again.
 bundle_ok=1
-bundle_url="$(printf '%s' "$page" | grep -o 'plugins/[^"'"'"' ]*dsh-client-modules/client\.js[^"'"'"']*' | head -1 | sed 's/&amp;/\&/g')"
+# The || true is load-bearing: under `set -euo pipefail` a page with NO
+# plugins URL makes grep exit 1, which aborted the whole script SILENTLY
+# here — no GATE FAIL message, exit 1, and the intended loud
+# "plugin bundles not served" diagnostic never ran. Found by the
+# update-control tests, red since this check landed (strict review 2026-09-20).
+bundle_url="$(printf '%s' "$page" | grep -o 'plugins/[^"'"'"' ]*dsh-client-modules/client\.js[^"'"'"']*' | head -1 | sed 's/&amp;/\&/g' || true)"
 if [ -n "$bundle_url" ]; then
   curl -fsS -b "$jar" -m 5 -o /dev/null "http://127.0.0.1:$GATE_PORT/$bundle_url" || bundle_ok=0
 else

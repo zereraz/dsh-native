@@ -40,8 +40,12 @@ try {
  execFileSync('codesign',['--force','--deep','--sign','-',dest]);
  execFileSync('codesign',['--verify','--deep','--strict',dest]);
  const version=execFileSync('/usr/libexec/PlistBuddy',['-c','Print :CFBundleShortVersionString',join(dest,'Contents/Info.plist')],{encoding:'utf8'}).trim();
+ // Harness version inside the candidate — the shell version (above) never
+ // moves between harness pulls, so it alone cannot tell updates apart.
+ let harnessVersion;
+ try { harnessVersion=JSON.parse(readFileSync(join(dest,'Contents/Resources/supervisor/node_modules/@deepseek-ai/dsh/package.json'),'utf8')).version } catch {}
  const path=join(homedir(),'.dsh/app-candidate.json');
- writeFileSync(path+'.tmp',JSON.stringify({path:dest,version,createdAt:new Date().toISOString()})+'\n',{mode:0o600});
+ writeFileSync(path+'.tmp',JSON.stringify({path:dest,version,...(harnessVersion?{harnessVersion}:{}),createdAt:new Date().toISOString()})+'\n',{mode:0o600});
  renameSync(path+'.tmp',path);
- console.log(`Staged v${version}; Reload Backend activates it when idle. Installed app is unchanged.`);
+ console.log(`Staged v${version}${harnessVersion?` (harness ${harnessVersion})`:''}; Reload Backend activates it when idle. Installed app is unchanged.`);
 } catch(e) {rmSync(dest,{recursive:true,force:true}); throw e;}

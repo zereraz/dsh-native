@@ -14,7 +14,10 @@ class UpdateTests(unittest.TestCase):
  */dsh/lib/bin.js) echo 'dsh web: http://127.0.0.1:41799/?token=fixture'; exec /bin/sleep 20;;
  esac''', 'git':'exit 0','pnpm':'exit 0','lsof':'exit 1','sleep':'/bin/sleep 0.01',
    'curl':'''[ "$FAIL_GATE" = 0 ] || { printf failed; exit 0; }
-printf '__DSH_BOOT__ __ModuleLoader__=' '''}
+case "$*" in
+ *"/plugins/"*) exit 0;;
+ *) printf '__DSH_BOOT__ __ModuleLoader__= plugins/??dsh-client-modules/client.js&rev=fixture';;
+esac'''}
    for n,s in cmds.items(): p=bin/n;p.write_text('#!/bin/bash\n'+s+'\n');p.chmod(0o755)
    env={**os.environ,'HOME':str(home),'HARNESS_REPO':str(t/'harness'),'DST':str(dst),'TEST_ROOT':str(t),'FAIL_GATE':str(int(fail)),'DSH_CONTROL_PATH':str(bin),'PATH':str(bin)+':'+os.environ['PATH']}
    result=subprocess.run(['/bin/bash',str(t/'scripts/update-app.sh')]+(['--restart'] if restart else []),env=env,capture_output=True,text=True,timeout=15)
