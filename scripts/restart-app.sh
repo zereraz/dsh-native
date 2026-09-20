@@ -44,11 +44,31 @@ drain() {
 boot() {
  # Never accept an old process's published URL as the readiness signal.
  rm -f "${DSH_WEB_URL_FILE:-$DATA/web-url.txt}"
+ # dsh-local 2026-09-20 (strict review, closing the Sep-16 incident class):
+ # the boot line and PTC can pass while every plugin is dead — readiness is
+ # not tree health. The preflight boots the OLD app and the update gate runs
+ # at stage time, so the NEW backend's own log is the only witness at
+ # activation. Capture the log offset before bootstrap, then check what the
+ # new process wrote. Missing log file (test fixtures) skips the check.
+ local log="${DSH_APP_LOG:-$HOME/Library/Logs/dsh-app-41730.log}"
+ local lines_before=0
+ [ -f "$log" ] && lines_before=$(wc -l < "$log" | tr -d ' ')
  launchctl bootstrap "gui/$(id -u)" "$PLIST" || return 1
  for _ in $(seq 1 40); do
   if node "$ROOT/ready.mjs"; then
-   DSH_APP_SUP="$DST/Contents/Resources/supervisor" node "$ROOT/verify-ptc.mjs" && return 0
-   return 1
+   DSH_APP_SUP="$DST/Contents/Resources/supervisor" node "$ROOT/verify-ptc.mjs" || return 1
+   if [ -f "$log" ]; then
+    # Tree composition can complete just after the boot line; give the log
+    # a moment before judging. The sentinel re-checks every 30s as the
+    # long-horizon net.
+    sleep 2
+    if tail -n +"$((lines_before + 1))" "$log" | grep -aq "plugin tree failed to load"; then
+     echo 'READINESS FAIL: plugin tree failed to load in the new backend — rolling back' >&2
+     tail -n +"$((lines_before + 1))" "$log" | grep -aE "failed to apply loader entry|duplicate prefix|Cannot find package" | head -3 >&2
+     return 1
+    fi
+   fi
+   return 0
   fi
   sleep 1
  done
