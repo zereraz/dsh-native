@@ -78,6 +78,20 @@ offenders — do not remove them.
    moved the GC death-spiral wall from 4 GB to 16 GB; the creep itself
    stayed unexplained until measured. Before accepting any "raise the
    limit" fix, start the measurement that would have justified it.
+ 10. **A signed bundle is not a byte-identical copy.** Home-patch plugin
+    entries (root `~/.dsh/cordis.patch.yml`) failed to import — "failed to
+    import", error swallowed into a silent ctx logger — when booted from the
+    signed app bundle, while byte-identical supervisor copies booted them
+    clean. The cordis loader's Node-internals import fast-path is the
+    differentiator; registering any ESM hook (`--import` a no-op register)
+    forces the standard import path and fixes it. The launchd plist carries
+    `NODE_OPTIONS="--import ~/.dsh/loader-hook/register.mjs"` for this; the
+    hook files live in `~/.dsh/loader-hook/`; patch-entry packages must be
+    resolvable from `~/.dsh/node_modules/` (the patch file's dir is the
+    entry import base — real-dir copies, not symlinks into the bundle).
+    Symptom class: MCP servers (indmoney, tinyfish) silently dead, and
+    minutes-long "Loading history…" hangs on sessions containing their
+    tool events.
 
 **Mechanical gates (do not remove):**
 - `stage-app.mjs` — dependency-closure assertion: every `@deepseek-ai`
