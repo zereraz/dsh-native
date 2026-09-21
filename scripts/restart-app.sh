@@ -118,6 +118,11 @@ if boot; then
   rm -f "$DATA/app-candidate.json"
  fi
  node "$ROOT/stamp-update-state.mjs" applied "$DST"
+ # dsh-local 2026-09-22 (signed-bundle import fix): home-patch packages
+ # are real-dir copies in ~/.dsh/node_modules (README rule 10). The freshly
+ # activated app's supervisor is their source of truth — re-sync so an
+ # update never leaves the copies stale against the live app.
+ bash "$HOME/.dsh/tools/sync-patch-packages.sh" || echo 'WARN: patch-package re-sync failed; run ~/.dsh/tools/sync-patch-packages.sh manually' >&2
  open -g "$DST"
  echo 'Reload complete: authenticated boot and PTC passed. Test the plugin behavior in the app.'
  exit 0
