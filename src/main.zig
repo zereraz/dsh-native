@@ -53,7 +53,56 @@ fn resolveUiUrl(io: std.Io) []const u8 {
 // we reload the window onto the new authenticated URL.
 const backend_watch_timer_id: u64 = 0x6473_6877; // "dshw" — below the SDK's reserved timer base
 const backend_watch_interval_ns: u64 = 2 * std.time.ns_per_s;
-const min_reload_interval_ms: i64 = 15_000;
+
+/// Pure decision core for the backend-restart watch — no I/O, no runtime
+/// calls, so the whole policy is unit-testable in CI (`zig build test
+/// -Dplatform=null`). All state is owned here and touched only from the
+/// platform loop thread.
+const BackendWatch = struct {
+    pending_buf: [512]u8 = undefined,
+    pending_len: usize = 0,
+    pending_count: u32 = 0,
+    last_reload_ms: i64 = 0,
+
+    /// A candidate must be seen on this many consecutive polls before we
+    /// act, so a crash-looping backend (file flapping every few seconds)
+    /// cannot trigger a reload storm.
+    const debounce_polls: u32 = 2;
+    /// At most one reload per interval, even if the file keeps changing.
+    const min_interval_ms: i64 = 15_000;
+    /// Smallest plausible boot url ("http://a.b") and the storage ceiling.
+    const min_url_len: usize = 8;
+
+    /// Decide what this poll's observed url means. Returns the url to
+    /// reload onto (valid only until the caller frees the buffer it points
+    /// into — copy it first), or null when nothing should happen.
+    ///
+    /// Policy: same url as shown → idle; a new url must survive
+    /// `debounce_polls` consecutive polls AND the rate limit before it
+    /// wins; anything flapping restarts the debounce.
+    fn poll(self: *BackendWatch, current: []const u8, seen: []const u8, now_ms: i64) ?[]const u8 {
+        if (seen.len < min_url_len or seen.len > self.pending_buf.len) return null;
+        if (std.mem.eql(u8, seen, current)) {
+            self.pending_count = 0;
+            return null;
+        }
+        if (seen.len == self.pending_len and
+            std.mem.eql(u8, seen, self.pending_buf[0..self.pending_len]))
+        {
+            self.pending_count += 1;
+        } else {
+            @memcpy(self.pending_buf[0..seen.len], seen);
+            self.pending_len = seen.len;
+            self.pending_count = 1;
+            return null;
+        }
+        if (self.pending_count < debounce_polls) return null;
+        if (now_ms - self.last_reload_ms < min_interval_ms) return null;
+        self.pending_count = 0;
+        self.last_reload_ms = now_ms;
+        return seen;
+    }
+};
 
 /// Monotonic milliseconds since an arbitrary origin (the duration clock).
 /// Zig 0.16 routes std.time.milliTimestamp-style reads through std.Io; this
@@ -83,13 +132,10 @@ const App = struct {
     io: std.Io,
     ui_url: []const u8 = DEFAULT_UI_URL,
 
-    /// Watch state — only touched on the platform loop thread (timer
-    /// events), so no locking is needed.
+    /// Backend-restart watch — driven from the platform loop thread (timer
+    /// events); see BackendWatch for the decision policy.
     watch_armed: bool = false,
-    pending_buf: [512]u8 = undefined,
-    pending_len: usize = 0,
-    pending_count: u32 = 0,
-    last_reload_ms: i64 = 0,
+    watch: BackendWatch = .{},
 
     fn app(self: *@This()) native_sdk.App {
         return .{
@@ -127,8 +173,8 @@ const App = struct {
         }
     }
 
-    /// Poll WEB_URL_FILE; when a NEW url stays stable across consecutive
-    /// polls and we haven't reloaded recently, swap the window onto it.
+    /// Poll WEB_URL_FILE and hand the observed url to the watch policy;
+    /// on a confirmed backend restart, reload onto the fresh url.
     fn checkBackendUrl(self: *App, runtime: *native_sdk.Runtime) void {
         const raw = std.Io.Dir.cwd().readFileAlloc(
             self.io,
@@ -137,34 +183,8 @@ const App = struct {
             .limited(2048),
         ) catch return;
         defer std.heap.page_allocator.free(raw);
-        const url = std.mem.trimEnd(u8, raw, "\r\n \t");
-        if (url.len <= 7 or url.len > url_buf.len) return;
-
-        // Same url we are already showing: nothing to do, clear any candidate.
-        if (std.mem.eql(u8, url, self.ui_url)) {
-            self.pending_count = 0;
-            return;
-        }
-
-        // Debounce: a candidate must win two consecutive polls (~4s) before
-        // we act, so a crash-looping backend (file flapping every few
-        // seconds) cannot trigger a reload storm.
-        if (url.len == self.pending_len and
-            std.mem.eql(u8, url, self.pending_buf[0..self.pending_len]))
-        {
-            self.pending_count += 1;
-        } else {
-            @memcpy(self.pending_buf[0..url.len], url);
-            self.pending_len = url.len;
-            self.pending_count = 1;
-            return;
-        }
-        if (self.pending_count < 2) return;
-
-        // Rate limit: at most one reload per interval even if the file
-        // keeps changing.
-        const now = monotonicMs();
-        if (now - self.last_reload_ms < min_reload_interval_ms) return;
+        const seen = std.mem.trimEnd(u8, raw, "\r\n \t");
+        const reload_url = self.watch.poll(self.ui_url, seen, monotonicMs()) orelse return;
 
         // The backend restarted; the page currently shown is already broken
         // (its streams died with the old process), so reloading onto the
@@ -172,10 +192,8 @@ const App = struct {
         // loadWindowWebView is the platform primitive the SDK's own reload
         // path uses; target the first live window's real id (1 when none
         // is registered yet, matching the SDK's own default).
-        @memcpy(url_buf[0..url.len], url);
-        self.ui_url = url_buf[0..url.len];
-        self.pending_count = 0;
-        self.last_reload_ms = now;
+        @memcpy(url_buf[0..reload_url.len], reload_url);
+        self.ui_url = url_buf[0..reload_url.len];
         const window_id = if (runtime.window_count > 0) runtime.windows[0].info.id else 1;
         runtime.options.platform.services.loadWindowWebView(
             window_id,
@@ -314,4 +332,76 @@ test "originOf extracts scheme host port" {
 test "twinOrigin swaps loopback host spelling" {
     try std.testing.expectEqualStrings("http://localhost:41730", twinOrigin("http://127.0.0.1:41730").?);
     try std.testing.expectEqualStrings("http://127.0.0.1:41731", twinOrigin("http://localhost:41731").?);
+}
+
+// BackendWatch policy tests. Timestamps are monotonic-since-boot scale
+// (large), so the initial last_reload_ms = 0 never bites the rate limit.
+const t0: i64 = 3_600_000; // one hour of uptime
+
+test "BackendWatch ignores the url already shown" {
+    var w = BackendWatch{};
+    const a = "http://127.0.0.1:41730/?token=aaa";
+    try std.testing.expect(w.poll(a, a, t0) == null);
+    try std.testing.expect(w.poll(a, a, t0 + 999_999) == null);
+}
+
+test "BackendWatch fires only after two consecutive polls" {
+    var w = BackendWatch{};
+    const a = "http://127.0.0.1:41730/?token=aaa";
+    const b = "http://127.0.0.1:41730/?token=bbb";
+    try std.testing.expect(w.poll(a, b, t0) == null); // arms the candidate
+    const fired = w.poll(a, b, t0 + 2_000);
+    try std.testing.expect(fired != null);
+    try std.testing.expectEqualStrings(b, fired.?);
+}
+
+test "BackendWatch restarts debounce when the url flaps" {
+    var w = BackendWatch{};
+    const a = "http://127.0.0.1:41730/?token=aaa";
+    const b = "http://127.0.0.1:41730/?token=bbb";
+    const c = "http://127.0.0.1:41730/?token=ccc";
+    try std.testing.expect(w.poll(a, b, t0) == null); // arm b
+    try std.testing.expect(w.poll(a, c, t0 + 2_000) == null); // flap resets to c
+    // Without the reset this would fire (two b polls); with it, c needs
+    // two of its own consecutive polls.
+    const fired = w.poll(a, c, t0 + 4_000);
+    try std.testing.expect(fired != null);
+    try std.testing.expectEqualStrings(c, fired.?);
+}
+
+test "BackendWatch clears the candidate when the shown url returns" {
+    var w = BackendWatch{};
+    const a = "http://127.0.0.1:41730/?token=aaa";
+    const b = "http://127.0.0.1:41730/?token=bbb";
+    try std.testing.expect(w.poll(a, b, t0) == null); // arm b
+    try std.testing.expect(w.poll(a, a, t0 + 2_000) == null); // back to a: reset
+    // b must re-arm from scratch (one poll alone must NOT fire).
+    try std.testing.expect(w.poll(a, b, t0 + 4_000) == null);
+    try std.testing.expect(w.poll(a, b, t0 + 6_000) != null);
+}
+
+test "BackendWatch rate-limits reloads" {
+    var w = BackendWatch{};
+    const b = "http://127.0.0.1:41730/?token=bbb";
+    const c = "http://127.0.0.1:41730/?token=ccc";
+    const d = "http://127.0.0.1:41730/?token=ddd";
+    // first reload fires at t0+2s
+    try std.testing.expect(w.poll(b, c, t0) == null);
+    try std.testing.expect(w.poll(b, c, t0 + 2_000) != null);
+    // a second confirmed change 3s later must be held back…
+    try std.testing.expect(w.poll(c, d, t0 + 3_000) == null);
+    try std.testing.expect(w.poll(c, d, t0 + 5_000) == null); // blocked by rate limit
+    // …and fires once the interval has passed.
+    try std.testing.expect(w.poll(c, d, t0 + 18_000) != null);
+}
+
+test "BackendWatch rejects malformed urls without arming" {
+    var w = BackendWatch{};
+    const a = "http://127.0.0.1:41730/?token=aaa";
+    const b = "http://127.0.0.1:41730/?token=bbb";
+    try std.testing.expect(w.poll(a, "short", t0) == null);
+    try std.testing.expect(w.poll(a, "", t0) == null);
+    // junk did not arm anything: b still needs its own two polls.
+    try std.testing.expect(w.poll(a, b, t0 + 2_000) == null);
+    try std.testing.expect(w.poll(a, b, t0 + 4_000) != null);
 }

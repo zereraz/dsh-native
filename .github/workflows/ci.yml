@@ -28,4 +28,11 @@ jobs:
           if [ ! -f "$NATIVE_SDK_PATH/build.zig" ]; then
             git clone --depth 1 https://github.com/vercel-labs/native.git "$NATIVE_SDK_PATH"
           fi
+      - name: SDK patches must apply cleanly
+        run: |
+          # Regression guard for the dsh-local native-sdk patches
+          # (menu-bar merge, App-Nap disable): an SDK upgrade that shifts
+          # patch context must fail HERE, loudly — never silently ship an
+          # unpatched host that suspends the web content.
+          bash scripts/apply-native-sdk-patches.sh
       - run: zig build test -Dplatform=null -Dnative-sdk-path="$NATIVE_SDK_PATH"
