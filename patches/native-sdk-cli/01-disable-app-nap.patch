@@ -1,0 +1,24 @@
+--- a/src/platform/macos/appkit_host.m
++++ b/src/platform/macos/appkit_host.m
+@@ -7935,6 +7935,21 @@
+ 
+     NativeSdkLaunchLap("host_init");
+     [NSApplication sharedApplication];
++    // dsh-local fix: never App-Nap. This host is a pure window for live web
++    // content (DSH): macOS App Nap suspends the process — and with it the
++    // WKWebView WebContent process — whenever the window is occluded or the
++    // system idles. A suspended page silently loses WebSockets and stalls
++    // timers, which surfaces as forever-"Loading history…", stale sidebars
++    // and out-of-order chat lists after the window wakes. A native window
++    // must never alter app behavior, so hold a user-initiated activity for
++    // the whole process lifetime and make nap impossible. Re-apply if the
++    // npm SDK is upgraded without this.
++    static id dshNoNapActivity = nil;
++    if (dshNoNapActivity == nil) {
++        dshNoNapActivity = [[NSProcessInfo processInfo]
++            beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
++                              reason:@"dsh-native: web content must never be suspended"];
++    }
+     NSApplicationActivationPolicy policy = dockVisible ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory;
+     [NSApp setActivationPolicy:policy];
+     NativeSdkLaunchLap("nsapp_ready");
